@@ -1,0 +1,21 @@
+system:
+  name: "QuantTrading"
+  log_level: "INFO"
+  timezone: "Asia/Shanghai"
+  data_dir: "./data"
+
+data:
+  default_store: "parquet"
+  parquet_dir: "./data/processed"
+  duckdb_path: "./data/quant.duckdb"
+
+risk:
+  max_position_pct: 0.25
+  max_single_order_pct: 0.10
+  max_daily_loss_pct: 0.05
+  max_order_frequency: 100
+
+backtest:
+  default_commission: 0.0003
+  default_slippage: 0.0001
+  initial_capital: 1000000.0
