@@ -84,6 +84,7 @@ def _check_ctp_available() -> bool:
     try:
         import thostmduserapi  # noqa: F401
         import thosttraderapi  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -112,19 +113,13 @@ class CTPMdSpi:
         """行情前置断开回调。CTP 会自动重连，无需手动处理。"""
         logger.warning(f"CTP 行情前置断开, 原因代码: {reason}")
 
-    def OnRspUserLogin(
-        self, data: dict, error: dict, request_id: int, is_last: bool
-    ) -> None:
+    def OnRspUserLogin(self, data: dict, error: dict, request_id: int, is_last: bool) -> None:
         """行情登录响应回调。"""
         if error and error.get("ErrorID", 0) != 0:
-            logger.error(
-                f"CTP 行情登录失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}"
-            )
+            logger.error(f"CTP 行情登录失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}")
             self._login_success = False
         else:
-            logger.info(
-                f"CTP 行情登录成功, 交易日: {data.get('TradingDay', '')}"
-            )
+            logger.info(f"CTP 行情登录成功, 交易日: {data.get('TradingDay', '')}")
             self._login_success = True
         self._login_event.set()
 
@@ -173,9 +168,7 @@ class CTPMdSpi:
         except Exception as e:
             logger.error(f"CTP 行情解析错误: {e}")
 
-    def OnRspSubMarketData(
-        self, data: dict, error: dict, request_id: int, is_last: bool
-    ) -> None:
+    def OnRspSubMarketData(self, data: dict, error: dict, request_id: int, is_last: bool) -> None:
         """订阅行情响应回调。"""
         if error and error.get("ErrorID", 0) != 0:
             logger.error(
@@ -216,14 +209,10 @@ class CTPTdSpi:
         logger.warning(f"CTP 交易前置断开, 原因代码: {reason}")
         self._gateway._connected = False
 
-    def OnRspAuthenticate(
-        self, data: dict, error: dict, request_id: int, is_last: bool
-    ) -> None:
+    def OnRspAuthenticate(self, data: dict, error: dict, request_id: int, is_last: bool) -> None:
         """客户端认证响应回调。认证通过后自动发起登录。"""
         if error and error.get("ErrorID", 0) != 0:
-            logger.error(
-                f"CTP 认证失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}"
-            )
+            logger.error(f"CTP 认证失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}")
             self._auth_success = False
         else:
             logger.info("CTP 客户端认证成功")
@@ -231,14 +220,10 @@ class CTPTdSpi:
             self._gateway._td_login()
         self._auth_event.set()
 
-    def OnRspUserLogin(
-        self, data: dict, error: dict, request_id: int, is_last: bool
-    ) -> None:
+    def OnRspUserLogin(self, data: dict, error: dict, request_id: int, is_last: bool) -> None:
         """交易登录响应回调。登录成功后获取前置编号和会话编号用于唯一标识本次会话。"""
         if error and error.get("ErrorID", 0) != 0:
-            logger.error(
-                f"CTP 交易登录失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}"
-            )
+            logger.error(f"CTP 交易登录失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}")
             self._login_success = False
         else:
             self._gateway._front_id = data.get("FrontID", 0)
@@ -258,23 +243,16 @@ class CTPTdSpi:
     ) -> None:
         """结算单确认响应。每日首次登录需确认昨日结算单后才能交易。"""
         if error and error.get("ErrorID", 0) != 0:
-            logger.error(
-                f"CTP 结算确认失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}"
-            )
+            logger.error(f"CTP 结算确认失败: [{error['ErrorID']}] {error.get('ErrorMsg', '')}")
         else:
-            logger.info(
-                f"CTP 结算单已确认, 确认日期: {data.get('ConfirmDate', '')}"
-            )
+            logger.info(f"CTP 结算单已确认, 确认日期: {data.get('ConfirmDate', '')}")
 
-    def OnRspOrderInsert(
-        self, data: dict, error: dict, request_id: int, is_last: bool
-    ) -> None:
+    def OnRspOrderInsert(self, data: dict, error: dict, request_id: int, is_last: bool) -> None:
         """报单录入响应 - 仅在报单被 CTP 柜台拒绝时回调。"""
         if error and error.get("ErrorID", 0) != 0:
             order_ref = data.get("OrderRef", "")
             logger.error(
-                f"CTP 报单被拒: ref={order_ref} "
-                f"[{error['ErrorID']}] {error.get('ErrorMsg', '')}"
+                f"CTP 报单被拒: ref={order_ref} [{error['ErrorID']}] {error.get('ErrorMsg', '')}"
             )
             order = self._gateway._order_map.get(order_ref)
             if order:
@@ -300,10 +278,7 @@ class CTPTdSpi:
         elif ctp_status in (STATUS_NO_TRADE, STATUS_NOT_TOUCHED):
             order.status = OrderStatus.SUBMITTED
 
-        logger.info(
-            f"CTP 订单状态: ref={order_ref} status={order.status.value} "
-            f"msg={status_text}"
-        )
+        logger.info(f"CTP 订单状态: ref={order_ref} status={order.status.value} msg={status_text}")
 
     def OnRtnTrade(self, data: dict) -> None:
         """成交回报通知 - 每笔成交单独推送。"""
@@ -327,9 +302,7 @@ class CTPTdSpi:
             trade_time = data.get("TradeTime", "")
             trading_day = data.get("TradingDay", "")
             try:
-                ts = datetime.strptime(
-                    f"{trading_day} {trade_time}", "%Y%m%d %H:%M:%S"
-                )
+                ts = datetime.strptime(f"{trading_day} {trade_time}", "%Y%m%d %H:%M:%S")
             except (ValueError, TypeError):
                 ts = datetime.now()
 
@@ -346,10 +319,7 @@ class CTPTdSpi:
             order.filled_quantity += fill.quantity
             order.avg_fill_price = fill.price
 
-            logger.info(
-                f"CTP 成交: ref={order_ref} {side.value} "
-                f"{fill.quantity}@{fill.price}"
-            )
+            logger.info(f"CTP 成交: ref={order_ref} {side.value} {fill.quantity}@{fill.price}")
 
             if self._gateway._on_fill:
                 self._gateway._on_fill(fill)
@@ -426,14 +396,10 @@ class CTPTdSpi:
         if is_last:
             self._account_event.set()
 
-    def OnRspOrderAction(
-        self, data: dict, error: dict, request_id: int, is_last: bool
-    ) -> None:
+    def OnRspOrderAction(self, data: dict, error: dict, request_id: int, is_last: bool) -> None:
         """撤单响应 - 仅在撤单被拒绝时回调。"""
         if error and error.get("ErrorID", 0) != 0:
-            logger.error(
-                f"CTP 撤单被拒: [{error['ErrorID']}] {error.get('ErrorMsg', '')}"
-            )
+            logger.error(f"CTP 撤单被拒: [{error['ErrorID']}] {error.get('ErrorMsg', '')}")
 
 
 class CTPGateway(BaseGateway):
@@ -548,8 +514,7 @@ class CTPGateway(BaseGateway):
 
         if not _check_ctp_available():
             logger.warning(
-                "openctp-ctp 未安装，CTP 网关以桩模式运行。"
-                "安装方法: pip install openctp-ctp"
+                "openctp-ctp 未安装，CTP 网关以桩模式运行。安装方法: pip install openctp-ctp"
             )
             self._stub_mode = True
             self._connected = True
@@ -688,9 +653,7 @@ class CTPGateway(BaseGateway):
                 continue
 
             if self._md_api:
-                self._md_api.SubscribeMarketData(
-                    [inst_id.symbol.encode()], 1
-                )
+                self._md_api.SubscribeMarketData([inst_id.symbol.encode()], 1)
                 logger.info(f"CTP 订阅行情: {inst_id}")
 
     async def submit_order(self, order: Order) -> str:
@@ -799,9 +762,7 @@ class CTPGateway(BaseGateway):
         if not self._td_api:
             return False
 
-        exchange = CTP_EXCHANGE_MAP.get(
-            target_order.instrument_id.exchange, ""
-        )
+        exchange = CTP_EXCHANGE_MAP.get(target_order.instrument_id.exchange, "")
 
         req = {
             "BrokerID": self._broker_id,
