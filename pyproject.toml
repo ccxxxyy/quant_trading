@@ -11,6 +11,11 @@ dependencies = [
     "pyyaml>=6.0",
     "structlog>=24.0",
     "uvloop>=0.19; sys_platform != 'win32'",
+    "joblib>=1.5.3",
+    "numpy>=2.4.6",
+    "ib-insync>=0.9.86",
+    "fastapi>=0.137.0",
+    "uvicorn>=0.49.0",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +57,10 @@ all = [
 [project.scripts]
 quant = "quant_trading.interface.cli:main"
 quant-web = "quant_trading.interface.web.app:main"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [build-system]
 requires = ["hatchling"]
