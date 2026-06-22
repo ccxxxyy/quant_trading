@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+    branches: [main, master, dev]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra data --extra web --extra viz
+
+      - name: Run linter
+        run: uv run ruff check src/ tests/
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Ruff check
+        run: uv run ruff check src/ tests/
+
+      - name: Ruff format check
+        run: uv run ruff format --check src/ tests/
+
+  import-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install all dependencies
+        run: uv sync --extra dev --extra data --extra web --extra viz
+
+      - name: Verify all module imports
+        run: |
+          uv run python -c "
+          from quant_trading.core.event import EventBus, EventType
+          from quant_trading.core.clock import SimulatedClock, LiveClock
+          from quant_trading.core.config import Settings
+          from quant_trading.core.engine import MainEngine
+          from quant_trading.model.market import Tick, Bar, OrderBook
+          from quant_trading.model.order import Order, Fill, OrderStatus
+          from quant_trading.model.position import Position
+          from quant_trading.model.account import Account
+          from quant_trading.model.instrument import InstrumentId, Exchange
+          from quant_trading.model.order_state import OrderStateMachine
+          from quant_trading.data.engine import DataEngine
+          from quant_trading.data.store import DataStore
+          from quant_trading.data.pipeline import DataPipeline
+          from quant_trading.data.providers.akshare import AkShareFeed
+          from quant_trading.data.providers.yfinance import YFinanceFeed
+          from quant_trading.backtest.engine import BacktestEngine
+          from quant_trading.backtest.matching import MatchingEngine
+          from quant_trading.backtest.analyzer import BacktestAnalyzer
+          from quant_trading.strategy.base import BaseStrategy, BarSeriesStrategy
+          from quant_trading.strategy.context import StrategyContext
+          from quant_trading.strategy.optimizer import StrategyOptimizer
+          from quant_trading.strategy.templates.cta import DualMovingAverageStrategy
+          from quant_trading.strategy.templates.rsi import RSIReversionStrategy
+          from quant_trading.strategy.templates.macd import MACDStrategy
+          from quant_trading.strategy.templates.turtle import TurtleTradingStrategy
+          from quant_trading.strategy.templates.grid import GridTradingStrategy
+          from quant_trading.strategy.templates.factor import FactorStrategy
+          from quant_trading.strategy.templates.arbitrage import PairTradingStrategy
+          from quant_trading.risk.engine import RiskEngine
+          from quant_trading.execution.engine import ExecutionEngine
+          from quant_trading.execution.algorithms.twap import TWAPAlgorithm
+          from quant_trading.execution.algorithms.vwap import VWAPAlgorithm
+          from quant_trading.portfolio.manager import PortfolioManager
+          from quant_trading.gateway.base import BaseGateway
+          from quant_trading.gateway.simulated import SimulatedGateway
+          from quant_trading.gateway.paper import PaperTradingGateway
+          from quant_trading.gateway.ibkr import IBGateway
+          from quant_trading.gateway.ctp import CTPGateway
+          from quant_trading.alpha.feature import FeatureEngine
+          from quant_trading.alpha.model import LightGBMModel, AlphaPipeline
+          from quant_trading.alpha.predict_service import PredictService
+          from quant_trading.alpha.walkforward import WalkForwardValidator
+          from quant_trading.analysis.metrics import sharpe_ratio, max_drawdown
+          from quant_trading.analysis.visualization import plot_equity_curve
+          from quant_trading.analysis.signal_chart import plot_signals
+          from quant_trading.monitoring.alert import AlertManager
+          from quant_trading.interface.cli import main as cli_main
+          from quant_trading.interface.services import run_backtest
+          from quant_trading.interface.web.app import app
+          from quant_trading.interface.web.schemas import BacktestRequest
+          print('All imports OK')
+          "

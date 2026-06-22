@@ -1,0 +1,817 @@
+# Quant Trading System（个人量化交易系统）
+
+一个**事件驱动**、**模块化**、支持**多市场**（A股/美股/期货）和**多策略**的 Python 量化交易平台。
+
+> **什么是量化交易？**
+> 量化交易是指用数学模型和计算机程序来代替人工判断，自动分析行情数据、发出买卖信号并执行交易。简单说就是：**用代码写规则，让程序帮你炒股/做期货**。
+
+---
+
+## 核心术语速查表
+
+
+| 术语 | 英文原词 | 通俗解释 |
+|------|----------|----------|
+| **事件驱动** | Event-Driven | 系统的工作方式：每当有新行情、新订单、新成交等"事件"发生时，系统自动触发对应的处理逻辑，像"有事就做，没事就等" |
+| **回测** | Backtest | 用历史数据模拟运行策略，看看"如果过去按这个规则操作，能赚多少钱"，用来验证策略靠不靠谱 |
+| **实盘** | Live Trading | 用真金白银在真实市场上交易 |
+| **模拟盘** | Paper Trading | 用真实行情数据但用虚拟资金交易，练手用的"仿真环境" |
+| **策略** | Strategy | 一套买卖规则，比如"均线金叉就买入，死叉就卖出" |
+| **K线/Bar** | Bar/Candlestick | 一段时间内的行情汇总：开盘价、最高价、最低价、收盘价、成交量（OHLCV） |
+| **Tick** | Tick | 最细粒度的行情数据，每一笔报价变动就是一个 Tick |
+| **标的** | Instrument | 你要交易的东西，可以是股票、期货合约、ETF基金等 |
+| **交易所** | Exchange | 买卖证券/期货的市场，如上交所(SSE)、深交所(SZSE)、纳斯达克(NASDAQ) |
+| **订单** | Order | 你发给交易所的买/卖指令 |
+| **市价单** | Market Order | 以当前市场价立即成交的订单 |
+| **限价单** | Limit Order | 设定一个价格，只有到了这个价或更好的价格才成交 |
+| **止损单** | Stop Order | 价格跌到某个位置时自动卖出，防止亏损扩大 |
+| **成交/Fill** | Fill | 订单被撮合执行了，你真的买到/卖出了 |
+| **持仓** | Position | 你当前持有的证券数量和方向（做多/做空/空仓） |
+| **做多** | Long | 先买入，期待价格上涨后卖出赚差价 |
+| **做空** | Short | 先借入卖出，期待价格下跌后买回赚差价（A股不支持，期货/美股支持） |
+| **空仓** | Flat | 没有持仓，不持有任何标的 |
+| **盈亏/P&L** | Profit & Loss | 赚了多少或亏了多少 |
+| **已实现盈亏** | Realized P&L | 已经卖出平仓的实际利润或亏损 |
+| **未实现盈亏** | Unrealized P&L | 还没卖出，按当前市价计算的"浮盈"或"浮亏" |
+| **手续费** | Commission | 每笔交易要付给券商/交易所的费用 |
+| **滑点** | Slippage | 你想以100元买入，但实际成交价是100.01元，这0.01元的差就是滑点 |
+| **权益** | Equity | 你账户里所有资产的总价值 = 现金 + 持仓市值 |
+| **权益曲线** | Equity Curve | 把每天的账户总价值连成一条线，展示资金增长/亏损的趋势图 |
+| **最大回撤** | Max Drawdown | 从最高点到最低点的最大跌幅，衡量"最坏时候亏了多少" |
+| **夏普比率** | Sharpe Ratio | 衡量收益和风险的比值，越高越好（>1算不错，>2很好）。通俗说就是"每承担1份风险能赚多少收益" |
+| **索提诺比率** | Sortino Ratio | 类似夏普比率，但只看下行风险（亏损的波动），更关注"亏钱的风险" |
+| **卡尔马比率** | Calmar Ratio | 年化收益 / 最大回撤，衡量"收益能不能覆盖最大风险" |
+| **胜率** | Win Rate | 赢的交易次数 / 总交易次数 |
+| **盈亏比** | Profit Factor | 总盈利 / 总亏损，大于1说明赚的比亏的多 |
+| **波动率** | Volatility | 价格上下波动的剧烈程度，波动率越大风险越高 |
+| **年化收益** | Annual Return | 把任意时间段的收益折算成"如果一整年都这样，年收益率是多少" |
+| **撮合** | Matching | 交易所把买单和卖单配对成交的过程 |
+| **网关** | Gateway | 连接本系统与券商/交易所的通道，像一个"翻译官"把我们的指令转成券商能懂的格式 |
+| **风控** | Risk Management | 风险控制，防止一次亏太多钱的保护机制 |
+| **CTA策略** | CTA | 商品交易顾问策略，通常是趋势跟踪类策略，跟着趋势方向买卖 |
+| **均线** | Moving Average | 把过去N天的收盘价取平均值连成线，用来判断趋势方向 |
+| **金叉** | Golden Cross | 短期均线从下方穿过长期均线向上，通常视为买入信号 |
+| **死叉** | Death Cross | 短期均线从上方穿过长期均线向下，通常视为卖出信号 |
+| **布林带** | Bollinger Band | 在均线上下各画一条"标准差通道"，价格碰到上轨可能回落，碰到下轨可能反弹 |
+| **配对交易** | Pair Trading | 找两只走势高度相关的股票，当价差偏离正常范围时做套利 |
+| **因子** | Factor | 预测股价涨跌的特征指标，比如"过去20天涨了多少"（动量因子）、"波动率有多大"等 |
+| **Alpha** | Alpha | 策略超过市场基准的超额收益，也泛指"赚钱的能力" |
+| **RSI** | Relative Strength Index | 相对强弱指标，衡量股票是"超买"（涨太多可能要跌）还是"超卖"（跌太多可能要涨） |
+| **TWAP** | Time-Weighted Average Price | 时间加权平均价格算法，把大单拆成小单均匀下单，避免一次性大额交易影响市价 |
+| **VWAP** | Volume-Weighted Average Price | 成交量加权平均价格算法，按历史各时段的成交量占比拆单，使成交均价接近市场 VWAP |
+| **MACD** | Moving Average Convergence Divergence | 移动平均收敛发散指标，由快线(DIF)和信号线(DEA)构成，金叉买入、死叉卖出 |
+| **海龟交易** | Turtle Trading | 经典趋势跟踪系统，价格突破N日最高价做多入场，跌破M日最低价止损出场 |
+| **网格交易** | Grid Trading | 在价格区间内按固定间距设置网格线，价格下穿网格买入、上穿网格卖出，适合震荡行情 |
+| **唐奇安通道** | Donchian Channel | N日内最高价和最低价构成的通道，海龟交易法的核心指标 |
+| **ATR** | Average True Range | 真实波幅均值，衡量价格波动大小，常用于动态止损和仓位管理 |
+| **超买/超卖** | Overbought/Oversold | RSI等指标的判断区域：RSI>70 超买（涨太多可能要跌），RSI<30 超卖（跌太多可能要涨） |
+| **数据清洗** | Data Cleaning | 对原始行情数据进行去重、异常值过滤、OHLC逻辑修正等处理，确保数据质量 |
+| **参数优化** | Parameter Optimization | 用网格搜索等方法遍历策略参数组合，找出历史表现最好的参数设置 |
+| **Walk-Forward** | Walk-Forward Validation | 滚动验证法：把历史数据切成多段"训练→测试"窗口，防止策略对历史数据过拟合 |
+| **过拟合** | Overfitting | 策略在历史数据上表现很好但在新数据上失效，因为"背答案"而非"学规律" |
+| **一致性比率** | Consistency Ratio | Walk-Forward 中盈利窗口数占总窗口数的比例，>50% 说明策略稳定 |
+| **订单状态机** | Order State Machine | 管理订单从"待提交→已提交→成交/撤销/拒绝"的合法状态流转 |
+| **告警** | Alert | 系统自动监测异常（回撤超限、连接断开等），触发通知提醒用户 |
+| **预测服务** | Predict Service | 加载训练好的 AI 模型，输入最新K线数据，输出买卖信号预测值 |
+| **特征工程** | Feature Engineering | 从原始K线数据中提取有预测力的数值指标（因子），作为 AI 模型的输入 |
+| **Parquet** | Parquet | 一种高效的数据文件格式，特别适合存储大量行情数据，读写速度快 |
+| **DuckDB** | DuckDB | 一个嵌入式的分析型数据库，可以用 SQL 查询本地的 Parquet 文件，无需额外安装数据库服务器 |
+| **EventBus** | 事件总线 | 系统内部的"广播站"，各模块通过它发送和接收消息，实现松耦合 |
+| **Polars** | Polars | 比 Pandas 快很多倍的 Python 数据处理库，用于处理行情表格数据 |
+| **FastAPI** | FastAPI | Python 的 Web 框架，用于提供 REST API 接口和 Web 页面服务 |
+| **LightGBM** | LightGBM | 一种机器学习算法（梯度提升树），在金融数据预测中效果很好 |
+
+---
+
+## 系统架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  接口层：命令行工具 / Web仪表盘 / Jupyter研究笔记本          │
+├─────────────────────────────────────────────────────────────┤
+│  工作流层：策略引擎 / 回测引擎 / 模拟盘交易                  │
+├─────────────────────────────────────────────────────────────┤
+│  核心层：事件总线 / 数据引擎 / 执行引擎 / 风控引擎           │
+├─────────────────────────────────────────────────────────────┤
+│  基础设施层：数据存储 / 交易网关 / 因子特征库                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**工作原理简述：**
+1. **数据引擎**从数据源（AkShare/yfinance）获取历史K线并存储为 Parquet 文件
+2. 回测时，K线数据按时间顺序逐条送入**事件总线**
+3. **策略**接收到 K线事件后，根据规则判断是否买卖，发出订单
+4. 订单先经过**风控引擎**检查（仓位是否超限、今天是否已亏太多等）
+5. 通过检查的订单送到**撮合引擎**（回测模式）或**交易网关**（实盘模式）执行
+6. 成交结果反馈回策略，更新持仓和账户资金
+
+---
+
+## 功能详解
+
+### 1. 数据获取与管理
+
+本系统支持从两个免费数据源自动拉取历史行情数据：
+
+- **AkShare**：获取 A 股（上交所 SSE、深交所 SZSE）和中国期货（中金所、上期所、大商所、郑商所）的日线/分钟线数据。无需注册，直接调用。
+- **yfinance**：获取美股（纳斯达克、纽交所）及全球市场的行情数据。同样无需注册。
+
+拉取后的数据以 **Parquet** 格式自动保存到本地磁盘（`data/processed/` 目录），按"交易所 → 代码 → 周期"分层存放。之后回测或分析时直接从本地读取，无需重复下载。
+
+此外内置了**数据清洗管道**，自动执行以下处理：
+- 去重（同一时间戳只保留最后一条）
+- 过滤无效数据（价格 ≤ 0、成交量 < 0）
+- OHLC 逻辑修正（确保最低价 ≤ 开/收盘价 ≤ 最高价）
+- 异常值剔除（单日涨跌幅超过 50% 的极端数据）
+
+### 2. 策略回测
+
+回测就是**用历史数据模拟运行你的交易策略**，看如果过去按照这个规则操作，资金曲线会怎么变化、能赚多少钱、最多会亏多少。
+
+本系统的回测引擎特点：
+- **事件驱动**：不是一次性计算出所有信号，而是像真实交易一样，一根K线一根K线地推进，确保策略不会"偷看未来数据"
+- **模拟撮合**：内置撮合引擎模拟交易所的订单匹配，支持市价单、限价单、止损单三种类型
+- **滑点和手续费**：自动模拟真实交易中的滑点（实际成交价与预期的偏差）和手续费，让回测结果更贴近真实
+- **初始资金可自定义**：默认 100 万元，你可以在回测配置中改成任意金额（如 10 万、50 万、500 万等）
+- **演示模式**：即使没有下载真实数据，也可以用内置的模拟数据快速体验回测全流程
+
+回测完成后会自动生成以下分析报告：
+- **10 项绩效指标**：总收益率、年化收益率、夏普比率（衡量风险收益比）、最大回撤（最坏情况亏了多少）、胜率、盈亏比等
+- **权益曲线图**：资金从开始到结束的增长/亏损走势
+- **回撤曲线图**：展示每个时间点距离最高点跌了多少
+- **逐笔交易记录**：每一次买入卖出的时间、价格、盈亏明细
+
+### 3. 七种内置交易策略
+
+系统内置了七种不同类型的策略模板，覆盖趋势跟踪、均值回归、套利三大类：
+
+| 策略 | 类型 | 一句话描述 | 适合什么行情 |
+|------|------|-----------|-------------|
+| 双均线 | 趋势跟踪 | 快线上穿慢线买入，下穿卖出 | 有明显涨/跌趋势时 |
+| 布林带 | 均值回归 | 价格碰到下轨买入，碰到上轨卖出 | 价格在区间内震荡时 |
+| RSI 反转 | 均值回归 | RSI 低于 30 买入，高于 70 卖出 | 超跌反弹或超涨回调 |
+| MACD | 趋势跟踪 | MACD 金叉买入，死叉卖出 | 中长期趋势行情 |
+| 海龟交易 | 趋势突破 | 价格创 20 日新高做多，跌破 10 日新低止损 | 强趋势突破行情 |
+| 网格交易 | 震荡套利 | 在价格区间内按网格线自动低买高卖 | 窄幅震荡行情 |
+| 配对交易 | 统计套利 | 两只相关股票价差偏离时反向操作 | 两只股票走势高度相关 |
+
+你也可以自己编写新策略（继承 `BarSeriesStrategy` 基类即可），然后放到 `strategies/` 目录下使用。
+
+### 4. 策略参数优化
+
+同一个策略使用不同的参数（比如"均线天数设为 5 天"还是"20 天"），回测效果会差异很大。**参数优化器**可以自动遍历所有参数组合，帮你找到历史表现最好的参数设置。
+
+例如：双均线策略的快线周期从 5 到 20、慢线周期从 20 到 60，系统会自动跑完所有组合（如 5+20, 5+25, 5+30, ..., 20+60），然后按夏普比率排名告诉你哪个组合最好。
+
+### 5. 风险控制
+
+每一笔订单在提交前，都会先经过**风控引擎**的四重检查：
+
+1. **单笔金额检查**：单次下单金额不能超过总资金的 10%，防止一把梭哈
+2. **持仓集中度检查**：单只股票的持仓不能超过总资金的 25%，防止重仓单一标的
+3. **日亏损检查**：当日累计亏损超过总资金的 5% 时，自动停止交易，"亏够了今天不玩了"
+4. **下单频率检查**：每小时下单不超过 100 次，防止程序失控疯狂下单
+
+任何一项不通过，该笔订单会被自动拒绝。所有阈值都可以在 `config/settings.yaml` 中修改。
+
+### 6. 执行算法（大单拆分）
+
+当你需要买卖大量股票时，如果一次性下单会冲击市场价格（别人看到你的大单会跟着涨/跌）。执行算法的作用是**把大单拆成多个小单分散执行**：
+
+- **TWAP**（时间加权）：把大单均匀分成 N 份，每隔一段时间下一份，像"慢慢吃"
+- **VWAP**（成交量加权）：根据历史上各时段的成交量比例来分配，成交量大的时段多下一些，"跟着大家一起买"
+
+### 7. 投资组合管理
+
+当你同时交易多只股票/期货时，**组合管理器**帮你看全局：
+- 所有持仓的汇总（总共持有哪些标的、各多少股、浮盈浮亏）
+- 组合总权益 = 现金余额 + 所有持仓的市值
+- 持仓集中度（某只股票占了总资金的百分之多少，是否过于集中）
+- 净敞口（做多的总值 - 做空的总值，反映你对市场方向的倾斜程度）
+
+### 8. 实盘网关
+
+系统内置四种交易网关，按使用门槛从低到高排列：
+
+| 网关 | 用途 | 需要安装 | 需要账号 |
+|------|------|---------|---------|
+| 模拟网关 | 回测时使用，内置撮合引擎 | 无（已内置） | 无 |
+| 模拟盘网关 | 真实行情 + 虚拟资金交易 | 无（已内置） | 无 |
+| CTP 网关 | 中国期货实盘/模拟盘 | `openctp-ctp` | SimNow 免费注册或期货公司开户 |
+| IB 网关 | 美股/全球市场实盘 | `ib_insync` | 盈透证券开户 |
+
+**CTP 网关已完整实现**，支持以下功能：
+- 连接/断开 CTP 交易和行情服务器（含自动认证 → 登录 → 结算确认全流程）
+- 订阅期货实时行情（Tick 级别推送）
+- 提交限价单/市价单，支持开仓/平仓
+- 撤销未成交订单
+- 查询持仓（区分多头/空头、今仓/昨仓）
+- 查询资金账户（动态权益、可用资金、保证金、浮盈浮亏）
+- 成交回报实时推送
+- 未安装 CTP 库时自动降级为桩模式（仅做接口验证）
+
+**零成本体验期货交易**：通过 SimNow 模拟盘（`config/gateways/ctp_simnow.yaml`），无需开期货账户，注册即可获得虚拟资金练习。
+
+**IB 网关已完整实现**，支持连接 TWS/Gateway、行情订阅、下单、撤单、持仓查询、账户查询、历史K线获取等全部功能。
+
+### 9. AI/机器学习模块
+
+对于进阶用户，系统提供了可选的 AI 模块：
+- **特征工程引擎**：自动从K线数据中提取有预测价值的因子（动量、波动率、RSI、量比等）
+- **LightGBM 模型**：一种适合金融表格数据的机器学习模型，输入因子 → 输出买卖预测
+- **预测服务**：加载训练好的模型，对最新行情做实时预测
+- **Walk-Forward 验证**：防止策略"过拟合"（在历史数据上表现好但实际没用）的验证方法
+
+### 10. 监控与告警
+
+系统内置实时监控模块，当检测到以下异常时自动发出告警：
+- 账户回撤超过设定阈值（如亏了 10%）
+- 当日亏损过大
+- 成交价格与预期偏差过大（可能是滑点异常）
+- 与券商的网络连接断开
+- 订单被拒绝
+
+### 11. Web 仪表盘
+
+系统自带一个专业级的 Web 管理界面（深色主题交易终端风格），包含五个页面：
+
+- **总览页**：四个核心指标卡片（已存储标的数、内置策略数、默认资金、支持交易所数），点击可跳转到对应管理页面
+- **数据管理**：选择数据源和标的代码，一键拉取行情数据，查看 K 线图预览
+- **回测实验室**：选择策略、设置参数和资金，运行回测后查看权益曲线、回撤图、交易记录和绩效报告。还可以一键运行"策略对比"，同时回测所有策略并横向对比
+- **策略库**：以卡片形式展示所有内置策略的说明、参数和用法，可一键跳转到回测页使用
+- **系统设置**：查看风控参数、回测默认配置和系统信息
+
+### 12. 命令行工具（CLI）
+
+不想用 Web 界面的用户也可以通过命令行完成所有操作：
+- `quant info`：查看系统版本和配置信息
+- `quant data fetch 600519.SSE --start 2023-01-01`：拉取指定标的的行情数据
+- `quant data list`：列出本地已有哪些数据
+- `quant backtest dual_ma --symbol 600519.SSE`：运行策略回测
+- `quant-web`：启动 Web 仪表盘服务
+
+### 13. Jupyter 研究笔记本
+
+为喜欢交互式研究的用户提供了 Jupyter Notebook 环境，内置一个 `01_quickstart.ipynb` 快速入门笔记本，涵盖：数据获取 → 数据清洗 → 策略回测 → 参数优化 → Walk-Forward 验证 → 信号可视化 → AI 特征工程 全流程演示。
+
+---
+
+## 快速开始
+
+### 环境要求
+
+- Python >= 3.12
+- [uv](https://docs.astral.sh/uv/) 包管理器
+
+### 安装
+
+```bash
+git clone <你的仓库地址> quant_trading
+cd quant_trading
+
+# 安装核心依赖
+uv sync
+
+# 安装全部功能（数据源、Web界面、图表、开发工具）
+uv sync --extra data --extra web --extra viz --extra dev
+```
+
+### 启动 Web 仪表盘
+
+```bash
+uv run quant-web
+```
+
+浏览器访问 **http://127.0.0.1:8888**
+
+仪表盘功能：
+- **总览页** — 系统状态、关键指标、最近回测的权益曲线
+- **数据管理** — 从 AkShare/yfinance 拉取行情数据，K线图预览
+- **回测实验室** — 选策略、设参数、一键运行回测，查看绩效报告
+- **策略库** — 查看所有内置策略的说明和参数
+- **系统设置** — 风控参数、回测默认配置
+
+### 命令行使用
+
+```bash
+# 查看系统信息
+uv run quant info
+
+# 获取贵州茅台日线数据（A股，从 AkShare 拉取）
+uv run quant data fetch 600519.SSE --start 2023-01-01 --provider akshare
+
+# 获取苹果公司日线数据（美股，从 yfinance 拉取）
+uv run quant data fetch AAPL.NASDAQ --start 2023-01-01 --provider yfinance
+
+# 查看本地已存储了哪些标的的数据
+uv run quant data list
+
+# 用双均线策略对贵州茅台做回测
+uv run quant backtest dual_ma --symbol 600519.SSE --start 2023-01-01
+
+# 指定参数运行回测（快线5日、慢线20日）
+uv run quant backtest dual_ma --symbol 600519.SSE --start 2023-01-01 --params fast_period=5,slow_period=20
+```
+
+### 运行示例
+
+```bash
+# 运行内置示例（用模拟数据演示双均线策略回测全流程）
+uv run python strategies/example_dual_ma.py
+
+# 运行自动化测试
+uv run pytest tests/ -v
+```
+
+---
+
+## 标的代码格式
+
+标的代码的格式是 `代码.交易所`，例如：
+
+| 代码 | 含义 |
+|------|------|
+| `600519.SSE` | 贵州茅台，在上海证券交易所上市 |
+| `000001.SZSE` | 平安银行，在深圳证券交易所上市 |
+| `AAPL.NASDAQ` | 苹果公司，在纳斯达克交易所上市 |
+| `IF2401.CFFEX` | 沪深300股指期货2024年1月合约，在中国金融期货交易所 |
+| `rb2401.SHFE` | 螺纹钢期货2024年1月合约，在上海期货交易所 |
+
+---
+
+## 项目结构
+
+```
+quant_trading/
+├── pyproject.toml                    # 项目元信息与依赖配置（名称、版本、所需 Python 版本、第三方库列表）
+├── config/
+│   └── settings.yaml                 # 全局配置文件（风控阈值、回测默认手续费/滑点/初始资金等参数）
+│
+├── src/quant_trading/                # ===== 源代码主目录 =====
+│   ├── __init__.py                   # 包初始化，定义版本号 __version__
+│   │
+│   ├── core/                         # ===== 核心引擎层：系统运行的骨架 =====
+│   │   ├── __init__.py               # 导出核心层的所有公开类
+│   │   ├── event.py                  # 事件总线（EventBus）：系统的"广播站"
+│   │   │                             #   - EventType：定义所有事件类型（K线、订单、成交、持仓变动等）
+│   │   │                             #   - Event：不可变的事件对象（类型 + 数据 + 时间戳）
+│   │   │                             #   - EventBus：同步事件总线，用于回测（按顺序处理，确保结果可重现）
+│   │   │                             #   - AsyncEventBus：异步事件总线，用于实盘（支持并发处理）
+│   │   ├── clock.py                  # 时钟抽象：统一回测和实盘的时间管理
+│   │   │                             #   - Clock：时钟的抽象接口
+│   │   │                             #   - SimulatedClock：模拟时钟，回测时手动推进时间，确保可重现
+│   │   │                             #   - LiveClock：真实时钟，实盘时使用系统当前时间
+│   │   ├── config.py                 # 配置管理：从 YAML 文件加载配置并用 Pydantic 做类型校验
+│   │   │                             #   - SystemConfig：系统名称、日志级别、时区
+│   │   │                             #   - DataConfig：数据存储路径配置
+│   │   │                             #   - RiskConfig：风控参数（最大持仓比例、单笔上限、日亏损限额）
+│   │   │                             #   - BacktestConfig：回测默认参数（手续费率、滑点、初始资金）
+│   │   │                             #   - Settings：汇总所有配置的顶层类
+│   │   ├── registry.py               # 组件注册中心：管理系统中所有子模块的生命周期（启动/停止）
+│   │   │                             #   - Component：所有组件的基类
+│   │   │                             #   - ComponentRegistry：按名称注册、查找、统一启停所有组件
+│   │   └── engine.py                 # 主引擎（MainEngine）：整个交易系统的中央调度器
+│   │                                 #   - 初始化事件总线、时钟、配置
+│   │                                 #   - 根据模式（回测/实盘）选择同步或异步组件
+│   │                                 #   - 提供统一的启动/停止接口
+│   │
+│   ├── model/                        # ===== 领域模型层：定义交易世界中的核心概念 =====
+│   │   ├── __init__.py               # 导出所有模型类，方便外部引用
+│   │   ├── instrument.py             # 交易标的定义
+│   │   │                             #   - Exchange：支持的交易所（上交所SSE、深交所SZSE、纳斯达克等）
+│   │   │                             #   - InstrumentType：标的类型（股票、ETF、期货、期权、加密货币）
+│   │   │                             #   - Currency：货币类型（人民币CNY、美元USD等）
+│   │   │                             #   - InstrumentId：标的唯一标识（代码+交易所，如 600519.SSE）
+│   │   │                             #   - Instrument：完整标的信息（名称、类型、最小变动价位、手续费率等）
+│   │   ├── market.py                 # 行情数据模型
+│   │   │                             #   - BarInterval：K线周期（1分钟/5分钟/日线/周线等）
+│   │   │                             #   - Tick：逐笔行情快照（最新价、买一价、卖一价、成交量）
+│   │   │                             #   - Bar：K线数据（开盘价/最高价/最低价/收盘价/成交量，即OHLCV）
+│   │   │                             #   - OrderBook：盘口数据（多档买卖挂单价格和数量）
+│   │   ├── order.py                  # 订单模型
+│   │   │                             #   - OrderSide：买/卖方向
+│   │   │                             #   - OrderType：订单类型（市价单/限价单/止损单）
+│   │   │                             #   - OrderStatus：订单状态（待提交/已提交/部分成交/全部成交/已撤/被拒）
+│   │   │                             #   - TimeInForce：订单有效期（撤单前有效/立即成交否则撤销/当日有效）
+│   │   │                             #   - Order：完整订单对象，跟踪从创建到成交的全过程
+│   │   │                             #   - Fill：成交回报（某笔订单以什么价格成交了多少数量）
+│   │   ├── position.py               # 持仓模型
+│   │   │                             #   - PositionSide：持仓方向（做多/做空/空仓）
+│   │   │                             #   - Position：单个标的的持仓跟踪（数量、均价、已实现盈亏、浮盈浮亏）
+│   │   ├── account.py                # 账户模型
+│   │   │                             #   - Account：资金账户（余额、可用资金、冻结资金、保证金、累计手续费）
+│   │   └── order_state.py            # 订单状态机（OrderStateMachine）
+│   │                                 #   - 定义订单合法的状态流转路径
+│   │                                 #   - 防止出现"已撤销→再成交"等非法跳转
+│   │
+│   ├── data/                         # ===== 数据引擎层：行情数据的获取、存储和分发 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── feed.py                   # 数据源抽象基类（DataFeed）
+│   │   │                             #   定义所有数据源必须实现的接口：获取历史K线、订阅实时行情等
+│   │   ├── store.py                  # 本地数据存储（DataStore）
+│   │   │                             #   - 把K线数据以 Parquet 格式保存到本地磁盘
+│   │   │                             #   - 按"交易所/代码/周期"组织目录结构
+│   │   │                             #   - 支持用 DuckDB 执行 SQL 查询
+│   │   │                             #   - 支持加载为 Polars DataFrame 做高速分析
+│   │   ├── engine.py                 # 数据引擎（DataEngine）：协调数据源和存储
+│   │   │                             #   - 从数据源拉取数据并自动缓存到本地
+│   │   │                             #   - 通过事件总线向策略推送行情事件
+│   │   ├── pipeline.py               # 数据清洗管道（DataPipeline）
+│   │   │                             #   - 去重、排序、无效数据过滤
+│   │   │                             #   - OHLC逻辑修正（确保 L≤O,C≤H）
+│   │   │                             #   - 异常值剔除、时区标准化
+│   │   └── providers/                # 数据源适配器目录
+│   │       ├── __init__.py           # 包初始化
+│   │       ├── akshare.py            # AkShare 数据源：免费获取A股和中国期货的历史行情
+│   │       └── yfinance.py           # yfinance 数据源：免费获取美股和全球市场的历史行情
+│   │
+│   ├── backtest/                     # ===== 回测引擎层：用历史数据模拟交易 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── engine.py                 # 回测引擎（BacktestEngine）：驱动整个回测流程
+│   │   │                             #   - 按时间顺序逐根K线回放
+│   │   │                             #   - 每根K线先撮合待成交订单，再通知策略
+│   │   │                             #   - 记录权益曲线和交易记录
+│   │   │                             #   - 最终计算绩效指标
+│   │   ├── matching.py               # 模拟撮合引擎（MatchingEngine）：模拟交易所的订单撮合
+│   │   │                             #   - 市价单：以K线开盘价成交（加上滑点）
+│   │   │                             #   - 限价单：价格到达限价时成交
+│   │   │                             #   - 止损单：价格触及止损价时触发
+│   │   │                             #   - 自动计算手续费
+│   │   └── analyzer.py               # 绩效分析器（BacktestAnalyzer）
+│   │                                 #   - PerformanceMetrics：所有绩效指标的数据类
+│   │                                 #   - TradeRecord：单笔完整交易的记录（买入→卖出为一笔）
+│   │                                 #   - 计算：总收益率、年化收益、夏普比率、最大回撤、胜率、盈亏比等
+│   │                                 #   - 生成文本格式的绩效报告
+│   │
+│   ├── strategy/                     # ===== 策略框架层：编写交易策略的基础设施 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── base.py                   # 策略基类
+│   │   │                             #   - BaseStrategy：所有策略的抽象基类
+│   │   │                             #     必须实现 on_init()（初始化）和 on_bar()（收到K线时的逻辑）
+│   │   │                             #   - BarSeriesStrategy：自动维护历史K线窗口的策略基类
+│   │   │                             #     方便策略直接获取最近N根K线来计算指标
+│   │   ├── context.py                # 策略上下文（StrategyContext）：策略与引擎之间的桥梁
+│   │   │                             #   - 提供简便的下单方法：buy_market/sell_market/buy_limit/sell_limit
+│   │   │                             #   - 提供 close_position（一键平仓）
+│   │   │                             #   - 同一接口在回测和实盘中行为一致
+│   │   ├── optimizer.py              # 策略参数优化器（StrategyOptimizer）
+│   │   │                             #   - 网格搜索遍历参数组合，找最优参数
+│   │   │                             #   - 按夏普比率/收益率/回撤排名
+│   │   └── templates/                # 内置策略模板目录
+│   │       ├── __init__.py           # 包初始化
+│   │       ├── cta.py                # CTA（趋势跟踪）策略模板
+│   │       │                         #   - DualMovingAverageStrategy：双均线策略
+│   │       │                         #     快线上穿慢线买入（金叉），快线下穿慢线卖出（死叉）
+│   │       │                         #   - BollingerBandStrategy：布林带策略
+│   │       │                         #     价格触及下轨买入，触及上轨卖出（均值回归思路）
+│   │       ├── rsi.py                # RSI反转策略模板
+│   │       │                         #   - RSIReversionStrategy：RSI超卖买入、超买卖出
+│   │       ├── macd.py               # MACD策略模板
+│   │       │                         #   - MACDStrategy：DIF/DEA金叉死叉交易
+│   │       ├── turtle.py             # 海龟交易策略模板
+│   │       │                         #   - TurtleTradingStrategy：唐奇安通道突破 + ATR止损
+│   │       ├── grid.py               # 网格交易策略模板
+│   │       │                         #   - GridTradingStrategy：价格区间内按网格低买高卖
+│   │       ├── factor.py             # 因子策略模板
+│   │       │                         #   - FactorStrategy：多因子选股策略基类
+│   │       │                         #     对一组标的计算因子值并排序，买入排名靠前的，定期调仓
+│   │       │                         #   - MomentumFactorStrategy：动量因子策略
+│   │       │                         #     买入过去N天涨幅最大的股票（追涨策略）
+│   │       └── arbitrage.py          # 套利策略模板
+│   │                                 #   - PairTradingStrategy：配对交易策略
+│   │                                 #     跟踪两只相关性高的标的的价差，偏离时做套利
+│   │
+│   ├── execution/                    # ===== 执行引擎层：订单的风控审核和路由 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── engine.py                 # 执行引擎（ExecutionEngine）
+│   │   │                             #   - 接收策略提交的订单
+│   │   │                             #   - 调用风控引擎做前置检查
+│   │   │                             #   - 通过检查后将订单转发给网关执行
+│   │   │                             #   - 处理成交回报，更新持仓和盈亏
+│   │   └── algorithms/               # 执行算法目录（大单拆分算法）
+│   │       ├── __init__.py           # 包初始化
+│   │       ├── twap.py               # TWAP算法（时间加权平均价格）
+│   │       │                         #   把大单按时间均匀拆分执行，减少市场冲击
+│   │       └── vwap.py               # VWAP算法（成交量加权平均价格）
+│   │                                 #   按各时段历史成交量比例拆单，使成交均价接近市场VWAP
+│   │
+│   ├── risk/                         # ===== 风控引擎层：交易前的安全检查 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   └── engine.py                 # 风控引擎（RiskEngine）
+│   │                                 #   每笔订单提交前自动执行以下检查：
+│   │                                 #   - 单笔下单金额是否超过总资金的10%
+│   │                                 #   - 单个标的持仓是否超过总资金的25%
+│   │                                 #   - 当日亏损是否已超过总资金的5%
+│   │                                 #   - 最近1小时下单次数是否超过100次
+│   │                                 #   任何一项不通过，订单会被自动拒绝
+│   │
+│   ├── portfolio/                    # ===== 投资组合管理层 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   └── manager.py                # 组合管理器（PortfolioManager）
+│   │                                 #   - 汇总所有标的的持仓状态
+│   │                                 #   - 计算组合层面指标：总权益、总浮盈浮亏、总敞口
+│   │                                 #   - 分析持仓集中度（某只股票占总资金的百分比）
+│   │
+│   ├── gateway/                      # ===== 交易网关层：连接券商/交易所的适配器 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── base.py                   # 网关抽象基类（BaseGateway）
+│   │   │                             #   定义所有网关必须实现的接口：连接、订阅行情、提交订单、查持仓
+│   │   ├── simulated.py              # 模拟网关：用于回测，内置撮合引擎
+│   │   ├── paper.py                  # 模拟盘网关：用真实行情但虚拟资金交易，适合策略验证
+│   │   ├── ibkr.py                   # IB网关（已实现）：连接盈透证券，支持美股/全球市场实盘
+│   │   └── ctp.py                    # CTP网关（已实现）：连接中国期货市场，支持SimNow模拟盘
+│   │
+│   ├── alpha/                        # ===== AI/机器学习模块（可选安装） =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── feature.py                # 因子工程引擎（FeatureEngine）
+│   │   │                             #   内置常用因子：
+│   │   │                             #   - MomentumFactor：动量因子（过去N天的涨跌幅）
+│   │   │                             #   - VolatilityFactor：波动率因子（收益率的标准差）
+│   │   │                             #   - RSIFactor：RSI 相对强弱指标
+│   │   │                             #   - VolumeRatioFactor：量比因子（成交量相对于平均值的倍数）
+│   │   ├── model.py                  # 机器学习模型接口
+│   │   │                             #   - BaseModel：所有 ML 模型的抽象基类（训练/预测/保存/加载）
+│   │   │                             #   - LightGBMModel：LightGBM 模型封装（适合金融表格数据）
+│   │   │                             #   - AlphaPipeline：端到端流水线（特征→训练→预测）
+│   │   ├── predict_service.py         # 预测服务（PredictService）
+│   │   │                             #   - 加载训练好的模型，输入K线→输出买卖预测
+│   │   ├── walkforward.py            # Walk-Forward 滚动验证
+│   │   │                             #   - 切分训练/测试窗口，防止策略过拟合
+│   │   │                             #   - 计算一致性比率评估策略稳健性
+│   │   └── models/                   # 内置模型目录
+│   │       └── __init__.py           # 包初始化
+│   │
+│   ├── analysis/                     # ===== 绩效分析与可视化 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   ├── metrics.py                # 绩效指标计算函数集
+│   │   │                             #   独立的计算函数：sharpe_ratio, sortino_ratio, max_drawdown,
+│   │   │                             #   calmar_ratio, win_rate, profit_factor, information_ratio
+│   │   ├── visualization.py          # 图表可视化（需安装 plotly）
+│   │   │                             #   - plot_equity_curve：绘制权益曲线图
+│   │   │                             #   - plot_drawdown：绘制回撤图
+│   │   │                             #   - plot_monthly_returns：绘制月度收益热力图
+│   │   └── signal_chart.py           # 信号可视化
+│   │                                 #   - plot_signals：K线图上标注买卖信号点
+│   │                                 #   - plot_equity_with_drawdown：权益+回撤双面板图
+│   │
+│   ├── monitoring/                   # ===== 监控告警模块 =====
+│   │   ├── __init__.py               # 包初始化
+│   │   └── alert.py                  # 告警管理器（AlertManager）
+│   │                                 #   - 实时监测：回撤超限、日亏损过大、连接中断
+│   │                                 #   - 告警级别：INFO / WARNING / CRITICAL
+│   │                                 #   - 支持自定义回调通知
+│   │
+│   └── interface/                    # ===== 用户接口层 =====
+│       ├── __init__.py               # 包初始化
+│       ├── cli.py                    # 命令行工具（quant 命令）
+│       │                             #   支持子命令：data fetch/list, backtest, info
+│       ├── services.py               # 共享业务逻辑：CLI 和 Web 共用的回测运行、数据获取等函数
+│       └── web/                      # Web 仪表盘
+│           ├── __init__.py           # 包初始化
+│           ├── app.py                # FastAPI 应用：REST API 路由定义 + 静态文件服务
+│           ├── schemas.py            # API 请求/响应的数据格式定义
+│           └── static/               # 前端静态文件
+│               ├── index.html        # 仪表盘主页面（单页应用）
+│               ├── css/style.css     # 样式表（深色交易终端风格）
+│               └── js/app.js         # 前端交互逻辑（导航、表单、图表、API调用）
+│
+├── strategies/                       # 用户自定义策略目录
+│   ├── .gitkeep                      # 占位文件
+│   └── example_dual_ma.py           # 示例：双均线策略完整回测演示（生成模拟数据→运行→输出报告）
+│
+├── data/                             # 本地行情数据目录
+│   └── .gitkeep                      # 占位文件（实际数据文件按 交易所/代码/周期/ 自动组织）
+│
+├── notebooks/                        # Jupyter 研究笔记本目录
+│   └── 01_quickstart.ipynb           # 快速入门笔记本：数据获取→回测→优化→信号可视化 全流程演示
+│
+├── tests/                            # 自动化测试目录
+│   ├── __init__.py
+│   ├── unit/                         # 单元测试
+│   │   ├── __init__.py
+│   │   ├── test_event_bus.py         # 事件总线测试：订阅/发布/取消/错误隔离
+│   │   ├── test_models.py            # 领域模型测试：标的ID解析、K线属性、持仓盈亏、订单状态
+│   │   ├── test_matching.py          # 撮合引擎测试：市价单/限价单成交、手续费计算
+│   │   ├── test_backtest.py          # 回测引擎测试：完整回测流程、盈亏验证
+│   │   ├── test_analyzer.py          # 绩效分析器测试：夏普比率/最大回撤/胜率等指标
+│   │   ├── test_data_store.py        # 数据存储测试：Parquet 写入/读取/查询
+│   │   ├── test_portfolio.py         # 组合管理器测试：持仓汇总/敞口/集中度
+│   │   ├── test_risk_engine.py       # 风控引擎测试：仓位/金额/日亏损/频率 四重检查
+│   │   └── test_strategies.py        # 策略测试：RSI/MACD/海龟/双均线 策略逻辑验证
+│   ├── integration/                  # 集成测试
+│   │   ├── __init__.py
+│   │   └── test_backtest_flow.py     # 回测全流程集成测试：生成数据→回测→绩效验证
+│   └── backtest/                     # 回测专项测试目录（待扩展）
+│       └── __init__.py
+│
+├── scripts/                          # 工具脚本目录
+│   ├── demo_backtest.py              # 多策略回测对比演示脚本
+│   ├── test_api.py                   # Web API 接口自动化测试脚本
+│   └── test_compare_api.py           # 策略对比 API 测试脚本
+└── .gitignore                        # Git 忽略规则
+```
+
+---
+
+## 内置策略说明
+
+| 策略ID | 名称 | 类型 | 原理 | 关键参数 |
+|--------|------|------|------|----------|
+| `dual_ma` | 双均线策略 | CTA趋势跟踪 | 计算两条均线（如10日和30日），快线上穿慢线买入（金叉），下穿卖出（死叉） | `fast_period`=快线天数, `slow_period`=慢线天数, `quantity`=每次买卖数量 |
+| `bollinger` | 布林带策略 | CTA均值回归 | 计算均线和标准差通道，价格跌到下轨附近买入，涨到上轨附近卖出 | `period`=布林带天数, `num_std`=标准差倍数, `quantity`=买卖数量 |
+| `rsi` | RSI反转策略 | 均值回归 | RSI跌到30以下（超卖）时买入，涨到70以上（超买）时卖出 | `rsi_period`=RSI计算天数, `oversold`=超卖阈值, `overbought`=超买阈值 |
+| `macd` | MACD策略 | 趋势跟踪 | MACD的DIF上穿DEA（金叉）买入，下穿（死叉）卖出 | `fast_period`=快线周期, `slow_period`=慢线周期, `signal_period`=信号线周期 |
+| `turtle` | 海龟交易策略 | 趋势突破 | 价格突破过去20天最高价买入，跌破过去10天最低价止损出场 | `entry_period`=入场通道天数, `exit_period`=出场通道天数 |
+| `grid` | 网格交易策略 | 震荡套利 | 在指定价格区间内设置网格线，价格下穿买入、上穿卖出 | `upper_price`=网格上界, `lower_price`=网格下界, `grid_count`=网格数量 |
+| `pair` | 配对交易策略 | 统计套利 | 选两只高度相关的标的，跟踪价差，价差偏离正常范围时反向操作 | `instrument_a`/`instrument_b`=两个标的, `lookback`=回看天数, `entry_threshold`=入场阈值 |
+
+---
+
+## 配置说明
+
+编辑 `config/settings.yaml`：
+
+```yaml
+risk:
+  max_position_pct: 0.25        # 单标的最大持仓占总资金比例（25%），防止"重仓一只"
+  max_single_order_pct: 0.10    # 单笔订单最大占总资金比例（10%），防止单次下太大
+  max_daily_loss_pct: 0.05      # 当日最大允许亏损占总资金比例（5%），亏到这就停止交易
+  max_order_frequency: 100      # 每小时最多下单次数，防止程序失控疯狂下单
+
+backtest:
+  default_commission: 0.0003    # 默认手续费率（万三，即交易1万元收3元手续费）
+  default_slippage: 0.0001      # 默认滑点率（万一，模拟实际成交价与预期的偏差）
+  initial_capital: 1000000.0    # 默认初始资金（100万）
+```
+
+---
+
+## Web API 接口
+
+启动服务后，访问 **http://127.0.0.1:8888/docs** 查看完整的交互式 API 文档。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/health` | 健康检查（检测服务是否正常运行） |
+| GET | `/api/system/info` | 获取系统信息（版本、配置、已有数据等） |
+| GET | `/api/strategies` | 获取所有内置策略的列表和参数说明 |
+| GET | `/api/data/instruments` | 查看本地已存储了哪些标的的数据 |
+| GET | `/api/data/bars/{标的代码}` | 获取某标的的K线数据用于图表展示 |
+| POST | `/api/data/fetch` | 从数据源拉取行情数据并保存到本地 |
+| POST | `/api/backtest/run` | 运行回测并返回绩效指标、权益曲线、交易记录 |
+| POST | `/api/backtest/compare` | 同时运行多策略回测并返回对比结果 |
+| GET | `/api/monitor/alerts` | 获取当前告警列表 |
+| GET | `/api/alpha/features` | 获取AI特征工程可用因子列表 |
+
+---
+
+## 自定义策略
+
+继承 `BarSeriesStrategy` 基类，实现 `on_init()` 和 `on_bar_update()` 方法：
+
+```python
+from quant_trading.strategy.base import BarSeriesStrategy
+from quant_trading.model.market import Bar
+
+class MyStrategy(BarSeriesStrategy):
+    def on_init(self):
+        """策略初始化，在回测开始前调用一次"""
+        pass
+
+    def on_bar_update(self, bar: Bar):
+        """每收到一根新K线时调用，在这里写买卖逻辑"""
+        closes = self.get_closes(bar.instrument_id)  # 获取历史收盘价列表
+        if len(closes) < 20:
+            return  # 数据不够20根K线时跳过
+
+        # 示例：如果当前价格高于20天前的价格，就买入
+        if closes[-1] > closes[-20]:
+            self.ctx.buy_market(bar.instrument_id, 100)  # 市价买入100股
+        elif closes[-1] < closes[-20]:
+            self.ctx.close_position(bar.instrument_id)   # 一键平仓
+```
+
+将策略文件保存到 `strategies/` 目录，然后通过 CLI 或 Web 界面运行。
+
+---
+
+## 可选依赖
+
+```bash
+uv sync --extra data    # 数据源（AkShare拉A股期货, yfinance拉美股）
+uv sync --extra web     # Web服务（FastAPI + Uvicorn）
+uv sync --extra viz     # 图表可视化（Plotly）
+uv sync --extra ml      # 机器学习（LightGBM, scikit-learn, PyTorch）
+uv sync --extra gateway  # 实盘网关（CTP期货, IB盈透证券）
+uv sync --extra dev     # 开发工具（pytest测试, ruff代码检查）
+uv sync --extra notebook # Jupyter 研究环境（notebook, ipywidgets, matplotlib）
+uv sync --extra all     # 以上全部安装
+```
+
+---
+
+## 实盘对接状态
+
+| 网关 | 状态 | 用途 | 安装命令 |
+|------|------|------|---------|
+| SimulatedGateway | 已实现 | 回测使用的模拟撮合 | 无需额外安装 |
+| PaperTradingGateway | 已实现 | 用真实行情+虚拟资金交易，验证策略 | 无需额外安装 |
+| CTPGateway | **已实现** | 中国期货实盘/SimNow模拟盘 | `uv sync --extra gateway` |
+| IBGateway | **已实现** | 盈透证券美股/全球市场实盘 | `uv sync --extra gateway` |
+
+### CTP 期货网关使用指南
+
+**第一步：注册 SimNow 账号**（免费，无需开期货账户）
+
+1. 打开 https://www.simnow.com.cn
+2. 注册账号，获得 InvestorID 和密码
+3. 将账号信息填入 `config/gateways/ctp_simnow.yaml`
+
+**第二步：安装 CTP 库**
+
+```bash
+uv sync --extra gateway
+# 或单独安装：pip install openctp-ctp
+```
+
+**第三步：在代码中使用**
+
+```python
+from quant_trading.gateway.ctp import CTPGateway
+from quant_trading.model.instrument import Exchange, InstrumentId
+
+# 方式一：快捷创建 SimNow 网关
+gateway = CTPGateway.create_simnow(
+    investor_id="你的SimNow账号",
+    password="你的密码",
+)
+
+# 方式二：从配置文件创建（适用于实盘）
+gateway = CTPGateway(
+    broker_id="9999",
+    investor_id="你的账号",
+    password="你的密码",
+    td_address="tcp://180.168.146.187:10130",
+    md_address="tcp://180.168.146.187:10131",
+    auth_code="0000000000000000",
+    app_id="simnow_client_test",
+)
+
+# 连接
+await gateway.connect()
+
+# 订阅行情（以黄金和股指期货为例）
+await gateway.subscribe_market_data([
+    InstrumentId("au2412", Exchange.SHFE),    # 黄金期货
+    InstrumentId("IF2412", Exchange.CFFEX),   # 沪深300股指期货
+])
+
+# 设置行情回调
+gateway.set_callbacks(on_tick=lambda tick: print(f"收到行情: {tick}"))
+
+# 查询账户和持仓
+account = await gateway.query_account()
+positions = await gateway.query_positions()
+```
+
+> **未安装 CTP 库时**：网关自动以"桩模式"运行，所有方法可正常调用但不会实际连接服务器，适合做接口测试和开发调试。
+
+### IB 盈透证券网关使用指南
+
+```python
+from quant_trading.gateway.ibkr import IBGateway
+
+gateway = IBGateway(host="127.0.0.1", port=7497, client_id=1)
+await gateway.connect()
+
+# 提交美股订单
+from quant_trading.model.order import Order, OrderSide, OrderType
+from quant_trading.model.instrument import InstrumentId, Exchange
+from decimal import Decimal
+
+order = Order(
+    instrument_id=InstrumentId("AAPL", Exchange.NASDAQ),
+    side=OrderSide.BUY,
+    order_type=OrderType.LIMIT,
+    quantity=100,
+    price=Decimal("150.00"),
+)
+await gateway.submit_order(order)
+```
+
+---
+
+## 技术栈
+
+| 用途 | 技术 | 说明 |
+|------|------|------|
+| 编程语言 | Python 3.12+ | 金融领域最流行的编程语言 |
+| 包管理 | uv | 极速 Python 包管理器，比 pip 快 10-100 倍 |
+| 数据存储 | Parquet + DuckDB | 列式文件 + 嵌入式数据库，零安装即可高效存取海量行情 |
+| 数据处理 | Polars | 比 Pandas 快很多的表格数据处理库 |
+| 配置校验 | Pydantic + YAML | 自动检查配置参数的类型和范围 |
+| Web 服务 | FastAPI + Uvicorn | Python 最快的 Web 框架，自带 API 文档 |
+| 前端 | HTML/CSS/JS + Chart.js | 原生前端，无需 Node.js 构建，开箱即用 |
+| 测试 | pytest | Python 最流行的测试框架 |
+| 日志 | structlog | 结构化日志，方便问题排查 |
+

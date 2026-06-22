@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quant Trading System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">Q</div>
+        <div>
+          <div class="brand-title">Quant Trading</div>
+          <div class="brand-sub">个人量化交易系统</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-page="dashboard">
+          <span class="nav-icon">◈</span> 总览
+        </button>
+        <button class="nav-item" data-page="data">
+          <span class="nav-icon">▤</span> 数据管理
+        </button>
+        <button class="nav-item" data-page="backtest">
+          <span class="nav-icon">⚡</span> 回测实验室
+        </button>
+        <button class="nav-item" data-page="strategies">
+          <span class="nav-icon">◎</span> 策略库
+        </button>
+        <button class="nav-item" data-page="settings">
+          <span class="nav-icon">⚙</span> 系统设置
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="status-dot online"></div>
+        <span id="system-status">系统就绪</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">总览</h1>
+          <p id="page-desc" class="page-desc">系统状态与核心指标一览</p>
+        </div>
+        <div class="topbar-actions">
+          <span class="version-badge" id="version-badge">v0.1.0</span>
+          <button class="btn btn-ghost" id="refresh-btn">刷新</button>
+        </div>
+      </header>
+
+      <!-- Dashboard -->
+      <section class="page active" id="page-dashboard">
+        <div class="kpi-grid" id="kpi-grid">
+          <div class="kpi-card clickable" onclick="navigateTo('data')" title="点击进入数据管理页面，获取和查看行情数据">
+            <div class="kpi-label">已存储标的</div>
+            <div class="kpi-value" id="kpi-instruments">-</div>
+            <div class="kpi-desc">本地已下载的股票/期货数量，点击管理</div>
+          </div>
+          <div class="kpi-card clickable" onclick="navigateTo('strategies')" title="点击查看所有内置策略的详细说明和参数">
+            <div class="kpi-label">内置策略</div>
+            <div class="kpi-value" id="kpi-strategies">-</div>
+            <div class="kpi-desc">可直接使用的交易策略模板，点击查看</div>
+          </div>
+          <div class="kpi-card clickable" onclick="navigateTo('backtest')" title="点击进入回测实验室，可自由设置初始资金">
+            <div class="kpi-label">默认回测资金</div>
+            <div class="kpi-value" id="kpi-capital">-</div>
+            <div class="kpi-desc">回测的默认起始资金（元），可在回测页修改</div>
+          </div>
+          <div class="kpi-card clickable" onclick="navigateTo('settings')" title="点击查看系统配置详情">
+            <div class="kpi-label">支持交易所</div>
+            <div class="kpi-value" id="kpi-exchanges">-</div>
+            <div class="kpi-desc">可接入的交易所数量（A股/美股/期货）</div>
+          </div>
+        </div>
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>快速回测</h3>
+              <button class="btn btn-sm btn-primary" onclick="navigateTo('backtest')">进入实验室</button>
+            </div>
+            <p class="panel-text">选择策略、标的与日期区间，一键运行事件驱动回测，查看权益曲线与绩效指标。</p>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>数据获取</h3>
+              <button class="btn btn-sm btn-primary" onclick="navigateTo('data')">管理数据</button>
+            </div>
+            <p class="panel-text">通过 AkShare / yfinance 拉取 A 股、美股、期货历史行情，自动存储为 Parquet 格式。</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>最近回测权益曲线</h3></div>
+          <div class="chart-wrap"><canvas id="dashboard-equity-chart"></canvas></div>
+        </div>
+      </section>
+
+      <!-- Data -->
+      <section class="page" id="page-data">
+        <div class="split-layout">
+          <div class="panel">
+            <div class="panel-header"><h3>获取行情数据</h3></div>
+            <form id="fetch-form" class="form">
+              <div class="form-row">
+                <label>标的代码</label>
+                <input type="text" name="symbol" placeholder="600519.SSE / AAPL.NASDAQ" required />
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>开始日期</label>
+                  <input type="date" name="start" required />
+                </div>
+                <div>
+                  <label>结束日期</label>
+                  <input type="date" name="end" />
+                </div>
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>周期</label>
+                  <select name="interval">
+                    <option value="1d">日线</option>
+                    <option value="1h">小时</option>
+                    <option value="5m">5 分钟</option>
+                    <option value="1m">1 分钟</option>
+                  </select>
+                </div>
+                <div>
+                  <label>数据源</label>
+                  <select name="provider">
+                    <option value="akshare">AkShare (A股/期货)</option>
+                    <option value="yfinance">yfinance (美股)</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">获取并存储</button>
+            </form>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>已存储标的</h3>
+              <span class="badge" id="instrument-count">0</span>
+            </div>
+            <div class="instrument-list" id="instrument-list"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>K 线预览</h3></div>
+          <div class="chart-wrap tall"><canvas id="price-chart"></canvas></div>
+        </div>
+      </section>
+
+      <!-- Backtest -->
+      <section class="page" id="page-backtest">
+        <!-- 单策略回测 -->
+        <div class="split-layout">
+          <div class="panel">
+            <div class="panel-header"><h3>回测配置</h3></div>
+            <form id="backtest-form" class="form">
+              <div class="form-row">
+                <label>策略</label>
+                <select name="strategy" id="strategy-select"></select>
+              </div>
+              <div class="form-row">
+                <label>标的代码</label>
+                <input type="text" name="symbol" value="600519.SSE" required />
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>开始日期</label>
+                  <input type="date" name="start" value="2023-01-01" required />
+                </div>
+                <div>
+                  <label>结束日期</label>
+                  <input type="date" name="end" />
+                </div>
+              </div>
+              <div class="form-row">
+                <label>初始资金（元）</label>
+                <input type="number" name="capital" value="1000000" min="1000" step="1" placeholder="可输入任意金额，如 100000" />
+              </div>
+              <div id="strategy-params" class="strategy-params"></div>
+              <label class="checkbox-label">
+                <input type="checkbox" name="use_demo_data" checked />
+                无本地数据时使用模拟数据（演示模式）
+              </label>
+              <button type="submit" class="btn btn-primary btn-block">运行回测</button>
+            </form>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h3>绩效指标</h3></div>
+            <div class="metrics-grid" id="metrics-grid">
+              <div class="metric-item"><span class="metric-label">总收益率</span><span class="metric-val" id="m-total-return">-</span></div>
+              <div class="metric-item"><span class="metric-label">年化收益</span><span class="metric-val" id="m-annual-return">-</span></div>
+              <div class="metric-item"><span class="metric-label">Sharpe</span><span class="metric-val" id="m-sharpe">-</span></div>
+              <div class="metric-item"><span class="metric-label">Sortino</span><span class="metric-val" id="m-sortino">-</span></div>
+              <div class="metric-item"><span class="metric-label">最大回撤</span><span class="metric-val" id="m-maxdd">-</span></div>
+              <div class="metric-item"><span class="metric-label">Calmar</span><span class="metric-val" id="m-calmar">-</span></div>
+              <div class="metric-item"><span class="metric-label">胜率</span><span class="metric-val" id="m-winrate">-</span></div>
+              <div class="metric-item"><span class="metric-label">盈亏比</span><span class="metric-val" id="m-pf">-</span></div>
+              <div class="metric-item"><span class="metric-label">交易次数</span><span class="metric-val" id="m-trades">-</span></div>
+              <div class="metric-item"><span class="metric-label">最终资金</span><span class="metric-val" id="m-final">-</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>权益曲线</h3></div>
+          <div class="chart-wrap tall"><canvas id="equity-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>回撤曲线</h3></div>
+          <div class="chart-wrap"><canvas id="drawdown-chart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>交易记录</h3></div>
+          <div class="table-wrap">
+            <table class="data-table" id="trades-table">
+              <thead>
+                <tr>
+                  <th>标的</th><th>方向</th><th>入场</th><th>出场</th>
+                  <th>数量</th><th>盈亏</th><th>收益率</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 策略对比 -->
+        <div class="panel compare-panel">
+          <div class="panel-header">
+            <h3>策略对比（全部策略 vs 同一标的）</h3>
+            <button class="btn btn-sm btn-primary" id="run-compare-btn">运行对比</button>
+          </div>
+          <div class="chart-wrap tall"><canvas id="compare-equity-chart"></canvas></div>
+          <div class="table-wrap" style="margin-top:1rem">
+            <table class="data-table" id="compare-table">
+              <thead>
+                <tr>
+                  <th>策略</th><th>总收益率</th><th>Sharpe</th>
+                  <th>最大回撤</th><th>交易次数</th><th>胜率</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Strategies -->
+      <section class="page" id="page-strategies">
+        <div class="strategy-cards" id="strategy-cards"></div>
+      </section>
+
+      <!-- Settings -->
+      <section class="page" id="page-settings">
+        <div class="panel">
+          <div class="panel-header"><h3>风控参数</h3></div>
+          <div class="settings-grid" id="risk-settings"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>回测默认参数</h3></div>
+          <div class="settings-grid" id="backtest-settings"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>系统信息</h3></div>
+          <pre class="code-block" id="system-info-block"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+  <div class="loading-overlay hidden" id="loading">
+    <div class="spinner"></div>
+    <span>处理中...</span>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

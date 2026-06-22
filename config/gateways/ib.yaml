@@ -1,0 +1,50 @@
+# ============================================================
+# IB 盈透证券网关配置
+# ============================================================
+#
+# 盈透证券（Interactive Brokers, IB）是全球最大的在线券商之一，
+# 支持美股、港股、欧股、期货、期权、外汇等 150+ 交易所。
+#
+# 使用步骤：
+#   1. 开户：https://www.interactivebrokers.com（需身份验证和入金）
+#   2. 下载并安装 TWS（Trader Workstation）或 IB Gateway 客户端
+#   3. 在 TWS/Gateway 中启用 API：
+#      - 菜单 → Edit → Global Configuration → API → Settings
+#      - 勾选 "Enable ActiveX and Socket Clients"
+#      - 确认端口号（TWS 默认 7497，Gateway 默认 4001）
+#   4. 安装 Python 库：pip install ib_insync
+#
+# 模拟账户：
+#   IB 提供免费的 Paper Trading（模拟盘）账户，
+#   开户时会同时获得模拟账户，可用于测试策略。
+#   模拟账户的 TWS 端口通常为 7497，实盘为 7496。
+# ============================================================
+
+gateway:
+  type: "ib"
+  name: "盈透证券"
+
+  # ---- 连接配置 ----
+  host: "127.0.0.1"           # TWS/Gateway 运行的主机（通常是本机）
+  port: 7497                  # TWS 模拟盘端口（实盘改为 7496）
+  client_id: 1                # 客户端编号（多个程序同时连接时需使用不同编号）
+  readonly: false             # 是否只读模式（true = 只看行情不下单）
+  timeout: 30                 # 连接超时（秒）
+
+# ---- 美股常用标的参考 ----
+# 股票：
+#   AAPL    - 苹果公司
+#   MSFT    - 微软公司
+#   GOOGL   - 谷歌（Alphabet）
+#   AMZN    - 亚马逊
+#   TSLA    - 特斯拉
+#   NVDA    - 英伟达
+#   META    - Meta（Facebook）
+#   SPY     - 标普500 ETF
+#   QQQ     - 纳斯达克100 ETF
+#
+# 期货：
+#   ES      - 标普500 E-mini 期货
+#   NQ      - 纳斯达克100 E-mini 期货
+#   GC      - 黄金期货（COMEX）
+#   CL      - 原油期货（NYMEX）
