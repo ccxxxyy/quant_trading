@@ -15,7 +15,8 @@ dependencies = [
     "numpy>=2.4.6",
     "ib-insync>=0.9.86",
     "fastapi>=0.137.0",
-    "uvicorn>=0.49.0",
+    "uvicorn[standard]>=0.49.0",
+    "websockets>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +36,8 @@ gateway = [
 ]
 web = [
     "fastapi>=0.115",
-    "uvicorn>=0.30",
+    "uvicorn[standard]>=0.30",
+    "websockets>=13.0",
 ]
 viz = [
     "plotly>=5.0",
