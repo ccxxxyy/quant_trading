@@ -10,6 +10,10 @@ const PAGE_META = {
   dashboard: { title: "总览", desc: "系统状态与核心指标一览" },
   data: { title: "数据管理", desc: "获取、存储与预览行情数据" },
   backtest: { title: "回测实验室", desc: "配置策略参数，运行事件驱动回测" },
+  optimize: { title: "参数优化", desc: "网格搜索最优策略参数" },
+  monitor: { title: "监控告警", desc: "系统告警与异常监控" },
+  paper: { title: "模拟盘", desc: "虚拟资金实时交易模拟" },
+  ailab: { title: "AI 实验室", desc: "特征工程、模型训练与预测" },
   strategies: { title: "策略库", desc: "内置策略模板与参数说明" },
   settings: { title: "系统设置", desc: "风控参数与系统配置" },
 };
@@ -529,6 +533,338 @@ function renderSettings() {
   document.getElementById("system-info-block").textContent = JSON.stringify(systemInfo, null, 2);
 }
 
+// ── Parameter Optimization ──────────────────────────────────
+
+const DEFAULT_GRIDS = {
+  dual_ma: { fast_period: [5, 10, 15, 20], slow_period: [20, 30, 40, 60] },
+  bollinger: { period: [10, 15, 20, 30], num_std: [1.5, 2.0, 2.5, 3.0] },
+  rsi: { rsi_period: [7, 14, 21], oversold: [20, 25, 30], overbought: [70, 75, 80] },
+  macd: { fast_period: [8, 12, 16], slow_period: [20, 26, 30], signal_period: [7, 9, 12] },
+  turtle: { entry_period: [10, 15, 20, 30], exit_period: [5, 10, 15] },
+  grid: { grid_count: [5, 8, 10, 15, 20] },
+};
+
+function populateOptStrategySelect() {
+  const select = document.getElementById("opt-strategy-select");
+  select.innerHTML = Object.entries(strategiesMeta)
+    .map(([id, meta]) => `<option value="${id}">${meta.name} (${id})</option>`)
+    .join("");
+  select.addEventListener("change", () => renderOptParamGrid(select.value));
+  renderOptParamGrid(select.value);
+}
+
+function renderOptParamGrid(strategyId) {
+  const container = document.getElementById("opt-param-grid");
+  const grid = DEFAULT_GRIDS[strategyId];
+  const meta = strategiesMeta[strategyId];
+  if (!grid || !meta) {
+    container.innerHTML = '<p style="font-size:0.8rem;color:var(--text-muted)">该策略暂无预设参数范围</p>';
+    return;
+  }
+  container.innerHTML = Object.entries(grid)
+    .map(([key, vals]) => {
+      const label = meta.params?.[key]?.label || key;
+      return `<div class="form-row">
+        <label>${label}（搜索值，逗号分隔）</label>
+        <input type="text" name="grid_${key}" value="${vals.join(", ")}" />
+      </div>`;
+    })
+    .join("");
+}
+
+document.getElementById("optimize-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const paramGrid = {};
+  for (const [key, val] of fd.entries()) {
+    if (key.startsWith("grid_")) {
+      const pkey = key.replace("grid_", "");
+      paramGrid[pkey] = val.split(",").map((v) => {
+        const n = Number(v.trim());
+        return isNaN(n) ? v.trim() : n;
+      });
+    }
+  }
+
+  showLoading(true);
+  try {
+    const result = await api("/optimize/run", {
+      method: "POST",
+      body: JSON.stringify({
+        strategy: fd.get("strategy"),
+        symbol: fd.get("symbol"),
+        start: fd.get("start"),
+        end: fd.get("end") || null,
+        capital: Number(fd.get("capital")),
+        param_grid: paramGrid,
+        use_demo_data: fd.get("use_demo_data") === "on",
+      }),
+    });
+
+    document.getElementById("opt-result-count").textContent = result.total;
+    const summary = document.getElementById("opt-summary");
+    summary.style.display = "block";
+
+    if (result.results.length > 0) {
+      const best = result.results[0];
+      document.getElementById("opt-best-sharpe").textContent = fmtNum(best.sharpe_ratio, 3);
+      document.getElementById("opt-best-return").textContent = fmtPct(best.total_return);
+      document.getElementById("opt-total").textContent = result.total;
+    }
+
+    const tbody = document.querySelector("#opt-results-table tbody");
+    tbody.innerHTML = result.results
+      .slice(0, 30)
+      .map((r, i) => {
+        const params = Object.entries(r.params)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(", ");
+        const retClass = r.total_return >= 0 ? "positive" : "negative";
+        const rowClass = i === 0 ? "opt-rank-1" : "";
+        return `<tr class="${rowClass}">
+          <td>${i + 1}</td>
+          <td style="font-size:0.7rem">${params}</td>
+          <td class="${retClass}">${fmtPct(r.total_return)}</td>
+          <td>${fmtNum(r.sharpe_ratio, 3)}</td>
+          <td>${fmtPct(r.max_drawdown)}</td>
+          <td>${fmtPct(r.win_rate, 1)}</td>
+          <td>${r.total_trades}</td>
+        </tr>`;
+      })
+      .join("");
+
+    toast(`优化完成: ${result.total} 种参数组合`, "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
+// ── Monitor & Alerts ────────────────────────────────────────
+
+async function loadAlerts() {
+  try {
+    const data = await api("/monitor/alerts?limit=100");
+    const alerts = data.alerts || [];
+
+    document.getElementById("mon-total").textContent = alerts.length;
+    document.getElementById("mon-critical").textContent = alerts.filter((a) => a.level === "critical").length;
+    document.getElementById("mon-warning").textContent = alerts.filter((a) => a.level === "warning").length;
+    document.getElementById("mon-info").textContent = alerts.filter((a) => a.level === "info").length;
+
+    const tbody = document.querySelector("#alerts-table tbody");
+    if (!alerts.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无告警记录</td></tr>';
+    } else {
+      tbody.innerHTML = alerts
+        .reverse()
+        .map((a) => `<tr>
+          <td>${a.timestamp?.slice(0, 19).replace("T", " ") || "-"}</td>
+          <td><span class="alert-badge ${a.level}">${a.level}</span></td>
+          <td>${a.type}</td>
+          <td>${a.message}</td>
+        </tr>`)
+        .join("");
+    }
+  } catch {
+    /* silent */
+  }
+}
+
+async function loadMonitorConfig() {
+  try {
+    const data = await api("/monitor/config");
+    const el = document.getElementById("mon-thresholds");
+    el.innerHTML = Object.entries(data.thresholds)
+      .map(([k, v]) => `<div class="setting-item"><div class="key">${k}</div><div class="val">${v}</div></div>`)
+      .join("");
+  } catch {
+    /* silent */
+  }
+}
+
+document.getElementById("mon-refresh-btn").addEventListener("click", async () => {
+  await loadAlerts();
+  await loadMonitorConfig();
+  toast("告警已刷新", "success");
+});
+
+document.getElementById("mon-test-btn").addEventListener("click", async () => {
+  try {
+    await api("/monitor/test", { method: "POST" });
+    await loadAlerts();
+    toast("测试告警已发送", "info");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+// ── Paper Trading ───────────────────────────────────────────
+
+function updatePaperAccount(account) {
+  if (!account) return;
+  document.getElementById("paper-balance").textContent = fmtNum(account.balance, 2);
+  document.getElementById("paper-available").textContent = fmtNum(account.available, 2);
+  document.getElementById("paper-commission").textContent = fmtNum(account.commission, 2);
+}
+
+function updatePaperPositions(positions) {
+  document.getElementById("paper-pos-count").textContent = positions?.length || 0;
+  const tbody = document.querySelector("#paper-positions-table tbody");
+  if (!positions?.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">暂无持仓</td></tr>';
+    return;
+  }
+  tbody.innerHTML = positions
+    .map((p) => {
+      const pnlClass = p.realized_pnl >= 0 ? "positive" : "negative";
+      return `<tr>
+        <td>${p.instrument_id}</td>
+        <td>${p.side}</td>
+        <td>${Math.abs(p.quantity)}</td>
+        <td>${fmtNum(p.avg_price)}</td>
+        <td class="${pnlClass}">${fmtNum(p.realized_pnl)}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+function updatePaperOrders(orders) {
+  const tbody = document.querySelector("#paper-orders-table tbody");
+  if (!orders?.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无挂单</td></tr>';
+    return;
+  }
+  tbody.innerHTML = orders
+    .map((o) => `<tr>
+      <td style="font-size:0.7rem">${o.order_id.slice(0, 8)}...</td>
+      <td>${o.instrument_id}</td>
+      <td>${o.side}</td>
+      <td>${o.order_type}</td>
+      <td>${o.quantity}</td>
+      <td>${o.price || "-"}</td>
+      <td>${o.status}</td>
+    </tr>`)
+    .join("");
+}
+
+async function refreshPaperState() {
+  try {
+    const [accData, posData, orderData] = await Promise.all([
+      api("/paper/account"),
+      api("/paper/positions"),
+      api("/paper/orders"),
+    ]);
+    updatePaperAccount(accData.account);
+    updatePaperPositions(posData.positions);
+    updatePaperOrders(orderData.orders);
+  } catch {
+    /* gateway not initialized yet */
+  }
+}
+
+document.getElementById("paper-connect-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    const result = await api("/paper/connect", { method: "POST", body: "{}" });
+    updatePaperAccount(result.account);
+    updatePaperPositions([]);
+    updatePaperOrders([]);
+    toast("模拟盘已重置", "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
+document.getElementById("paper-order-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  showLoading(true);
+  try {
+    const result = await api("/paper/order", {
+      method: "POST",
+      body: JSON.stringify({
+        symbol: fd.get("symbol"),
+        side: fd.get("side"),
+        order_type: fd.get("order_type"),
+        quantity: Number(fd.get("quantity")),
+        price: fd.get("price") ? Number(fd.get("price")) : null,
+      }),
+    });
+    updatePaperAccount(result.account);
+    updatePaperPositions(result.positions);
+    toast(`订单已提交: ${result.status}`, "success");
+    const orderData = await api("/paper/orders");
+    updatePaperOrders(orderData.orders);
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
+// ── AI Lab ──────────────────────────────────────────────────
+
+async function loadAIFeatures() {
+  try {
+    const data = await api("/alpha/features");
+    const tbody = document.querySelector("#ai-features-table tbody");
+    tbody.innerHTML = data.features
+      .map((f) => `<tr>
+        <td>${f.name}</td>
+        <td><span class="badge">${f.type}</span></td>
+        <td style="font-size:0.75rem">${f.dependencies.join(", ")}</td>
+      </tr>`)
+      .join("");
+  } catch {
+    /* silent */
+  }
+}
+
+async function loadAIModels() {
+  try {
+    const data = await api("/alpha/models");
+    const container = document.getElementById("ai-models-cards");
+    container.innerHTML = data.models
+      .map((m) => `<div class="model-card">
+        <h4>${m.name}</h4>
+        <p>${m.description}</p>
+        <span class="status-tag">${m.status}</span>
+      </div>`)
+      .join("");
+  } catch {
+    /* silent */
+  }
+}
+
+document.getElementById("ai-compute-btn").addEventListener("click", async () => {
+  const symbol = document.getElementById("ai-compute-symbol").value || "DEMO.SSE";
+  showLoading(true);
+  try {
+    const data = await api(`/alpha/compute?symbol=${encodeURIComponent(symbol)}`, { method: "POST" });
+    const thead = document.querySelector("#ai-compute-table thead tr");
+    thead.innerHTML = data.columns.map((c) => `<th>${c}</th>`).join("");
+
+    const tbody = document.querySelector("#ai-compute-table tbody");
+    tbody.innerHTML = data.rows
+      .map((row) => `<tr>${data.columns.map((c) => {
+        let v = row[c];
+        if (typeof v === "number") v = v.toFixed(4);
+        return `<td>${v ?? ""}</td>`;
+      }).join("")}</tr>`)
+      .join("");
+
+    toast(`特征计算完成: ${data.total_rows} 行 × ${data.columns.length} 列`, "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
 // ── Init ───────────────────────────────────────────────────
 
 async function refreshSystemInfo() {
@@ -542,6 +878,7 @@ async function refreshSystemInfo() {
   renderSettings();
   renderStrategyCards();
   populateStrategySelect();
+  populateOptStrategySelect();
 }
 
 async function init() {
@@ -549,7 +886,14 @@ async function init() {
   try {
     await api("/health");
     await refreshSystemInfo();
-    await loadInstruments();
+    await Promise.all([
+      loadInstruments(),
+      loadAlerts(),
+      loadMonitorConfig(),
+      refreshPaperState(),
+      loadAIFeatures(),
+      loadAIModels(),
+    ]);
     document.getElementById("system-status").textContent = "系统就绪";
   } catch (err) {
     document.getElementById("system-status").textContent = "API 未连接";
@@ -563,7 +907,14 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
   showLoading(true);
   try {
     await refreshSystemInfo();
-    await loadInstruments();
+    await Promise.all([
+      loadInstruments(),
+      loadAlerts(),
+      loadMonitorConfig(),
+      refreshPaperState(),
+      loadAIFeatures(),
+      loadAIModels(),
+    ]);
     toast("已刷新", "success");
   } catch (err) {
     toast(err.message, "error");

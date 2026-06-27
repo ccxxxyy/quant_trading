@@ -30,6 +30,18 @@
         <button class="nav-item" data-page="backtest">
           <span class="nav-icon">⚡</span> 回测实验室
         </button>
+        <button class="nav-item" data-page="optimize">
+          <span class="nav-icon">⊞</span> 参数优化
+        </button>
+        <button class="nav-item" data-page="monitor">
+          <span class="nav-icon">⚠</span> 监控告警
+        </button>
+        <button class="nav-item" data-page="paper">
+          <span class="nav-icon">▶</span> 模拟盘
+        </button>
+        <button class="nav-item" data-page="ailab">
+          <span class="nav-icon">◆</span> AI 实验室
+        </button>
         <button class="nav-item" data-page="strategies">
           <span class="nav-icon">◎</span> 策略库
         </button>
@@ -247,6 +259,206 @@
                   <th>最大回撤</th><th>交易次数</th><th>胜率</th>
                 </tr>
               </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Parameter Optimization -->
+      <section class="page" id="page-optimize">
+        <div class="split-layout">
+          <div class="panel">
+            <div class="panel-header"><h3>优化配置</h3></div>
+            <form id="optimize-form" class="form">
+              <div class="form-row">
+                <label>策略</label>
+                <select name="strategy" id="opt-strategy-select"></select>
+              </div>
+              <div class="form-row">
+                <label>标的代码</label>
+                <input type="text" name="symbol" value="600519.SSE" required />
+              </div>
+              <div class="form-row two-col">
+                <div><label>开始日期</label><input type="date" name="start" value="2023-01-01" required /></div>
+                <div><label>结束日期</label><input type="date" name="end" /></div>
+              </div>
+              <div class="form-row">
+                <label>初始资金（元）</label>
+                <input type="number" name="capital" value="1000000" min="1000" step="1" />
+              </div>
+              <div id="opt-param-grid" class="strategy-params">
+                <p style="font-size:0.8rem;color:var(--text-muted)">选择策略后自动生成参数搜索范围</p>
+              </div>
+              <label class="checkbox-label">
+                <input type="checkbox" name="use_demo_data" checked />
+                使用演示数据
+              </label>
+              <button type="submit" class="btn btn-primary btn-block">开始优化</button>
+            </form>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>优化结果</h3>
+              <span class="badge" id="opt-result-count">0</span>
+            </div>
+            <div class="opt-summary" id="opt-summary" style="display:none">
+              <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1rem">
+                <div class="kpi-card"><div class="kpi-label">最优 Sharpe</div><div class="kpi-value" id="opt-best-sharpe">-</div></div>
+                <div class="kpi-card"><div class="kpi-label">最优收益率</div><div class="kpi-value" id="opt-best-return">-</div></div>
+                <div class="kpi-card"><div class="kpi-label">组合总数</div><div class="kpi-value" id="opt-total">-</div></div>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="opt-results-table">
+                <thead>
+                  <tr>
+                    <th>#</th><th>参数</th><th>收益率</th><th>Sharpe</th>
+                    <th>最大回撤</th><th>胜率</th><th>交易数</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Monitor & Alerts -->
+      <section class="page" id="page-monitor">
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi-card"><div class="kpi-label">告警总数</div><div class="kpi-value" id="mon-total">0</div></div>
+          <div class="kpi-card"><div class="kpi-label">严重</div><div class="kpi-value negative" id="mon-critical">0</div></div>
+          <div class="kpi-card"><div class="kpi-label">警告</div><div class="kpi-value" style="color:var(--amber)" id="mon-warning">0</div></div>
+          <div class="kpi-card"><div class="kpi-label">信息</div><div class="kpi-value" style="color:var(--accent)" id="mon-info">0</div></div>
+        </div>
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>告警阈值配置</h3>
+            </div>
+            <div class="settings-grid" id="mon-thresholds"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>操作</h3>
+            </div>
+            <button class="btn btn-primary" id="mon-refresh-btn" style="margin-bottom:0.75rem;width:100%">刷新告警</button>
+            <button class="btn btn-ghost" id="mon-test-btn" style="width:100%">发送测试告警</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>告警记录</h3></div>
+          <div class="table-wrap">
+            <table class="data-table" id="alerts-table">
+              <thead>
+                <tr>
+                  <th>时间</th><th>级别</th><th>类型</th><th>消息</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Paper Trading -->
+      <section class="page" id="page-paper">
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi-card"><div class="kpi-label">总资产</div><div class="kpi-value" id="paper-balance">-</div></div>
+          <div class="kpi-card"><div class="kpi-label">可用资金</div><div class="kpi-value" id="paper-available">-</div></div>
+          <div class="kpi-card"><div class="kpi-label">累计手续费</div><div class="kpi-value" id="paper-commission">-</div></div>
+          <div class="kpi-card"><div class="kpi-label">持仓数</div><div class="kpi-value" id="paper-pos-count">0</div></div>
+        </div>
+        <div class="split-layout">
+          <div class="panel">
+            <div class="panel-header"><h3>下单面板</h3></div>
+            <form id="paper-order-form" class="form">
+              <div class="form-row">
+                <label>标的代码</label>
+                <input type="text" name="symbol" value="600519.SSE" required />
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>方向</label>
+                  <select name="side"><option value="buy">买入</option><option value="sell">卖出</option></select>
+                </div>
+                <div>
+                  <label>类型</label>
+                  <select name="order_type"><option value="market">市价</option><option value="limit">限价</option></select>
+                </div>
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>数量</label>
+                  <input type="number" name="quantity" value="100" min="1" />
+                </div>
+                <div>
+                  <label>价格（限价单）</label>
+                  <input type="number" name="price" step="0.01" placeholder="市价单无需填写" />
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">提交订单</button>
+            </form>
+            <div style="margin-top:1rem">
+              <button class="btn btn-ghost btn-block" id="paper-connect-btn">重置模拟盘</button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h3>当前持仓</h3></div>
+            <div class="table-wrap">
+              <table class="data-table" id="paper-positions-table">
+                <thead>
+                  <tr><th>标的</th><th>方向</th><th>数量</th><th>均价</th><th>已实现盈亏</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>挂单列表</h3></div>
+          <div class="table-wrap">
+            <table class="data-table" id="paper-orders-table">
+              <thead>
+                <tr><th>订单号</th><th>标的</th><th>方向</th><th>类型</th><th>数量</th><th>价格</th><th>状态</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI Lab -->
+      <section class="page" id="page-ailab">
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header"><h3>AI 特征因子</h3></div>
+            <p class="panel-text" style="margin-bottom:1rem">系统内置 7 个 Alpha 因子，可自动从 K 线数据中提取用于 ML 模型的特征。</p>
+            <div class="table-wrap">
+              <table class="data-table" id="ai-features-table">
+                <thead><tr><th>因子名称</th><th>类型</th><th>依赖数据</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h3>可用模型</h3></div>
+            <div id="ai-models-cards"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h3>特征计算预览</h3>
+            <div style="display:flex;gap:0.5rem;align-items:center">
+              <input type="text" id="ai-compute-symbol" value="DEMO.SSE" placeholder="标的代码"
+                     style="padding:0.4rem 0.6rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;font-family:var(--mono);width:140px" />
+              <button class="btn btn-sm btn-primary" id="ai-compute-btn">计算特征</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="ai-compute-table">
+              <thead><tr></tr></thead>
               <tbody></tbody>
             </table>
           </div>

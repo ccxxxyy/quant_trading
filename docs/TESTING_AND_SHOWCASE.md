@@ -250,7 +250,7 @@
 
 > 启动命令：`uv run quant-web`，然后浏览器访问 `http://127.0.0.1:8888`
 
-#### 10.1 API 接口
+#### 10.1 API 接口（基础）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
 | W-01 | 健康检查 | `GET /api/health` | `{"status":"ok","version":"0.1.0"}` |
@@ -261,22 +261,84 @@
 | W-06 | 自定义资金回测 | `POST /api/backtest/run` body: `{"strategy":"dual_ma","symbol":"TEST.SSE","start":"2024-01-01","capital":50000,"use_demo_data":true}` | initial_capital = 50000 |
 | W-07 | 策略对比 | `POST /api/backtest/compare` | 返回多策略回测结果对比 |
 | W-08 | 告警查询 | `GET /api/monitor/alerts` | 返回告警列表 |
-| W-09 | AI 因子列表 | `GET /api/alpha/features` | 返回已注册因子名 |
+| W-09 | AI 因子列表 | `GET /api/alpha/features` | 返回因子名、类型、依赖数据 |
 | W-10 | K线预览 | `GET /api/data/bars/TEST.SSE` | 返回柱状数据（若有） |
 
-#### 10.2 Web UI 页面
+#### 10.2 API 接口（参数优化）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| W-11 | 总览页加载 | 浏览器打开首页 | 显示 4 个 KPI 卡片（标的数、策略数、资金、交易所） |
-| W-12 | KPI 可点击 | 点击任一 KPI 卡片 | 跳转到对应页面 |
-| W-13 | 数据管理页 | 点击"数据管理" | 显示数据源选择、标的输入、获取按钮 |
-| W-14 | 回测实验室 | 点击"回测实验室" | 显示策略选择、参数配置、运行按钮 |
-| W-15 | 回测运行 | 选择策略 → 运行回测 | 显示权益曲线、回撤图、指标面板、交易记录 |
-| W-16 | 策略对比 | 点击"策略对比" | 同时回测所有策略并显示对比表和图表 |
-| W-17 | 策略库页 | 点击"策略库" | 以卡片形式展示 7 个策略，每张有说明和参数 |
-| W-18 | 设置页 | 点击"系统设置" | 显示风控参数、回测配置、系统信息 |
-| W-19 | 初始资金自定义 | 在回测页修改资金为任意值（如 12345） | 回测使用自定义资金 |
-| W-20 | 演示数据开关 | 勾选/取消"使用演示数据" | 勾选时无需下载数据即可回测 |
+| W-11 | 网格搜索 | `POST /api/optimize/run` body: `{"strategy":"dual_ma","symbol":"TEST.SSE","start":"2023-01-01","param_grid":{"fast_period":[5,10],"slow_period":[20,30]},"use_demo_data":true}` | 返回 results 数组（按 Sharpe 排序）和 total 数量 |
+| W-12 | 跳过无效组合 | 同上，包含 fast_period > slow_period 的组合 | 无效组合被自动跳过 |
+
+#### 10.3 API 接口（监控告警）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-13 | 告警阈值配置 | `GET /api/monitor/config` | 返回 thresholds 字典（max_drawdown, max_daily_loss 等） |
+| W-14 | 发送测试告警 | `POST /api/monitor/test` | 返回 alerts 列表，count > 0 |
+
+#### 10.4 API 接口（模拟盘）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-15 | 初始化模拟盘 | `POST /api/paper/connect` body: `{}` | status=connected，account.balance=1000000 |
+| W-16 | 查询账户 | `GET /api/paper/account` | 返回 account 对象（balance, available, commission, currency） |
+| W-17 | 查询持仓 | `GET /api/paper/positions` | 返回 positions 数组 |
+| W-18 | 市价买入 | `POST /api/paper/order` body: `{"symbol":"600519.SSE","side":"buy","order_type":"market","quantity":100}` | status=filled，positions 含该标的，available 减少 |
+| W-19 | 查询挂单 | `GET /api/paper/orders` | 返回 orders 数组 |
+| W-20 | 重置模拟盘 | `POST /api/paper/connect` body: `{"initial_capital":500000}` | balance=500000，持仓清空 |
+
+#### 10.5 API 接口（AI 实验室）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-21 | 特征计算 | `POST /api/alpha/compute?symbol=DEMO.SSE` | 返回 rows（最近 20 行）和 columns（含 momentum_5 等因子列） |
+| W-22 | 可用模型 | `GET /api/alpha/models` | 返回 models 列表，包含 lightgbm |
+
+#### 10.6 Web UI 页面（基础）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-23 | 总览页加载 | 浏览器打开首页 | 显示 4 个 KPI 卡片（标的数、策略数、资金、交易所） |
+| W-24 | KPI 可点击 | 点击任一 KPI 卡片 | 跳转到对应页面 |
+| W-25 | 数据管理页 | 点击"数据管理" | 显示数据源选择、标的输入、获取按钮 |
+| W-26 | 回测实验室 | 点击"回测实验室" | 显示策略选择、参数配置、运行按钮 |
+| W-27 | 回测运行 | 选择策略 → 运行回测 | 显示权益曲线、回撤图、指标面板、交易记录 |
+| W-28 | 策略对比 | 点击"策略对比" | 同时回测所有策略并显示对比表和图表 |
+| W-29 | 策略库页 | 点击"策略库" | 以卡片形式展示 7 个策略，每张有说明和参数 |
+| W-30 | 设置页 | 点击"系统设置" | 显示风控参数、回测配置、系统信息 |
+| W-31 | 初始资金自定义 | 在回测页修改资金为任意值（如 12345） | 回测使用自定义资金 |
+| W-32 | 演示数据开关 | 勾选/取消"使用演示数据" | 勾选时无需下载数据即可回测 |
+
+#### 10.7 Web UI 页面（参数优化）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-33 | 参数优化页导航 | 点击侧栏"参数优化" | 显示优化配置表单和结果面板 |
+| W-34 | 策略选择 → 参数范围自动生成 | 切换策略下拉 | 表单中自动出现该策略的参数搜索范围 |
+| W-35 | 运行优化 | 填写参数范围 → 点击"开始优化" | 结果表格显示参数组合排名（按 Sharpe 降序） |
+| W-36 | 最优 KPI 展示 | 优化完成后 | 顶部 KPI 显示最优 Sharpe、最优收益率、组合总数 |
+
+#### 10.8 Web UI 页面（监控告警）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-37 | 告警页导航 | 点击侧栏"监控告警" | 显示 4 个告警统计 KPI + 阈值配置 + 告警记录表 |
+| W-38 | 刷新告警 | 点击"刷新告警"按钮 | 告警列表重新加载 |
+| W-39 | 测试告警 | 点击"发送测试告警" | 告警表格新增一条 info 级别记录 |
+| W-40 | 告警级别徽章 | 查看告警记录 | critical 红色、warning 黄色、info 蓝色徽章 |
+
+#### 10.9 Web UI 页面（模拟盘）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-41 | 模拟盘页导航 | 点击侧栏"模拟盘" | 显示 4 个账户 KPI + 下单面板 + 持仓/挂单表 |
+| W-42 | 重置模拟盘 | 点击"重置模拟盘" | 账户回到初始资金，持仓清空 |
+| W-43 | 市价买入 | 输入标的 → 买入 100 股 → 提交 | 持仓表出现该标的，可用资金减少 |
+| W-44 | 市价卖出 | 选择卖出 → 提交 | 持仓表更新，已实现盈亏显示 |
+| W-45 | 下单表单验证 | 切换市价/限价单类型 | 限价单时价格输入框可用 |
+
+#### 10.10 Web UI 页面（AI 实验室）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-46 | AI 实验室导航 | 点击侧栏"AI 实验室" | 显示因子表格 + 模型卡片 + 特征计算面板 |
+| W-47 | 因子列表 | 进入 AI 实验室 | 表格展示 7 个因子（momentum、volatility、rsi、volume_ratio） |
+| W-48 | 模型卡片 | 进入 AI 实验室 | 显示 LightGBM 模型卡片及"available"状态 |
+| W-49 | 特征计算 | 输入标的 → 点击"计算特征" | 表格展示最近 20 行数据，包含所有因子列 |
+| W-50 | 导航栏完整 | 查看侧栏 | 9 个导航按钮（总览/数据/回测/参数优化/监控告警/模拟盘/AI实验室/策略库/设置） |
 
 ---
 
@@ -399,7 +461,65 @@ uv run quant-web
 
 ---
 
-### 展示五：Web API 接口
+### 展示五：参数优化（Web）
+
+**展示流程**：
+
+1. 左侧点击 **「参数优化」**
+2. 策略选 **双均线**
+3. 系统自动生成搜索范围（快线: 5,10,15,20 / 慢线: 20,30,40,60）
+4. 点击 **「开始优化」**
+5. **展示效果**：
+   - 顶部 KPI 显示最优 Sharpe、最优收益率、组合总数
+   - 结果表格按 Sharpe 降序排名，第一行蓝色高亮
+   - 每行显示参数组合、收益率、Sharpe、最大回撤、胜率、交易数
+
+---
+
+### 展示六：监控告警（Web）
+
+**展示流程**：
+
+1. 左侧点击 **「监控告警」**
+2. 查看阈值配置面板（回撤 10%、日亏损 5 万等）
+3. 点击 **「发送测试告警」**
+4. **展示效果**：
+   - 告警统计 KPI 更新（info +1）
+   - 告警记录表格新增一条记录，蓝色 info 徽章
+5. 点击 **「刷新告警」** 确认数据同步
+
+---
+
+### 展示七：模拟盘交易（Web）
+
+**展示流程**：
+
+1. 左侧点击 **「模拟盘」**
+2. 点击 **「重置模拟盘」** → 账户初始化为 100 万
+3. 下单面板输入 `600519.SSE` → 买入 → 市价 → 数量 100 → **「提交订单」**
+4. **展示效果**：
+   - 账户 KPI 更新：可用资金减少约 1 万元，手续费出现
+   - 持仓表新增一行：600519.SSE / long / 100 / 均价约 100
+5. 再次下单：卖出 100 股
+6. **展示效果**：持仓清空，已实现盈亏显示
+
+---
+
+### 展示八：AI 实验室（Web）
+
+**展示流程**：
+
+1. 左侧点击 **「AI 实验室」**
+2. **因子表格**：展示 7 个 Alpha 因子（momentum_5/10/20、volatility_10/20、rsi_14、volume_ratio_20）
+3. **模型卡片**：LightGBM 模型（available 状态）
+4. 特征计算区：输入 `DEMO.SSE` → 点击 **「计算特征」**
+5. **展示效果**：
+   - 表格展示 120 行 × 13 列数据（最近 20 行可见）
+   - 列包括 timestamp、OHLCV 和 7 个因子值
+
+---
+
+### 展示九：Web API 接口
 
 ```bash
 # 启动 Web 服务后，在另一个终端运行：
@@ -407,29 +527,38 @@ uv run quant-web
 # 1. 健康检查
 curl http://127.0.0.1:8888/api/health
 
-# 2. 查看系统信息
-curl http://127.0.0.1:8888/api/system/info
-
-# 3. 查看所有策略
+# 2. 查看所有策略
 curl http://127.0.0.1:8888/api/strategies
 
-# 4. 运行回测
+# 3. 运行回测
 curl -X POST http://127.0.0.1:8888/api/backtest/run \
   -H "Content-Type: application/json" \
   -d '{"strategy":"dual_ma","symbol":"TEST.SSE","start":"2024-01-01","use_demo_data":true}'
 
-# 5. 策略对比
-curl -X POST http://127.0.0.1:8888/api/backtest/compare
+# 4. 参数优化
+curl -X POST http://127.0.0.1:8888/api/optimize/run \
+  -H "Content-Type: application/json" \
+  -d '{"strategy":"dual_ma","symbol":"TEST.SSE","start":"2023-01-01","param_grid":{"fast_period":[5,10],"slow_period":[20,30]},"use_demo_data":true}'
 
-# 6. 查看 AI 因子
-curl http://127.0.0.1:8888/api/alpha/features
+# 5. 模拟盘下单
+curl -X POST http://127.0.0.1:8888/api/paper/connect -H "Content-Type: application/json" -d '{}'
+curl -X POST http://127.0.0.1:8888/api/paper/order \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"600519.SSE","side":"buy","order_type":"market","quantity":100}'
+
+# 6. AI 特征计算
+curl -X POST "http://127.0.0.1:8888/api/alpha/compute?symbol=DEMO.SSE"
+
+# 7. 监控告警
+curl http://127.0.0.1:8888/api/monitor/config
+curl -X POST http://127.0.0.1:8888/api/monitor/test
 ```
 
-**展示效果**：所有 API 返回 JSON 格式数据，可被任何前端/脚本调用。
+**展示效果**：全部 20 个 API 端点返回 JSON 格式数据，可被任何前端/脚本调用。
 
 ---
 
-### 展示六：风控引擎演示
+### 展示十：风控引擎演示
 
 ```python
 # uv run python
@@ -465,7 +594,7 @@ print(f"超大订单: {result}")  # approved=False, reason=单笔金额超限
 
 ---
 
-### 展示七：CTP 期货网关演示
+### 展示十一：CTP 期货网关演示
 
 ```python
 # uv run python
@@ -511,7 +640,7 @@ asyncio.run(demo())
 
 ---
 
-### 展示八：数据清洗管道演示
+### 展示十二：数据清洗管道演示
 
 ```python
 # uv run python
@@ -541,7 +670,7 @@ print(stats.summary())
 
 ---
 
-### 展示九：55 项自动化测试
+### 展示十三：55 项自动化测试
 
 ```bash
 uv run pytest tests/ -v --tb=short
@@ -551,7 +680,7 @@ uv run pytest tests/ -v --tb=short
 
 ---
 
-### 展示十：GitHub Actions CI/CD
+### 展示十四：GitHub Actions CI/CD
 
 **展示位置**：GitHub 仓库 → Actions 标签页
 
@@ -573,9 +702,11 @@ uv run pytest tests/ -v --tb=short
 | 绩效指标 | 10 项（收益率、年化、夏普、最大回撤、Calmar、胜率、盈亏比等） |
 | 风控检查 | 4 重（单笔限额、集中度、日亏损、频率） |
 | 执行算法 | 2 种（TWAP、VWAP） |
-| AI 因子 | 4 类（动量、波动率、RSI、量比） |
-| Web API | 10 个端点 |
-| Web 页面 | 5 个（总览、数据、回测、策略库、设置） |
+| AI 因子 | 4 类 7 个（动量×3、波动率×2、RSI、量比） |
+| Web API | 20 个端点 |
+| Web 页面 | 9 个（总览、数据、回测、参数优化、监控告警、模拟盘、AI实验室、策略库、设置） |
 | CLI 命令 | 4 个（info、data fetch、data list、backtest） |
 | 单元测试 | 55 个用例 |
+| 功能测试项 | 50 项 Web 测试 + 80+ 项全系统测试 |
+| 展示场景 | 14 个（含 4 个新增 Web 交互场景） |
 | CI 矩阵 | 4 种环境（2 OS × 2 Python） |
