@@ -61,7 +61,7 @@ quant = "quant_trading.interface.cli:main"
 quant-web = "quant_trading.interface.web.app:main"
 
 [[tool.uv.index]]
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+url = "https://pypi.org/simple"
 default = true
 
 [build-system]
