@@ -408,18 +408,16 @@ async def alpha_features():
 @app.post("/api/alpha/compute")
 async def alpha_compute(symbol: str = "DEMO.SSE"):
     """对指定标的计算全部 AI 特征。"""
-    from quant_trading.alpha.feature import FeatureEngine
-    from quant_trading.interface.services import generate_demo_bars
-
     import polars as pl
 
-    from quant_trading.model.instrument import InstrumentId
-
-    instrument_id = InstrumentId.from_str(symbol)
-
+    from quant_trading.alpha.feature import FeatureEngine
     from quant_trading.core.config import Settings
     from quant_trading.data.store import DataStore
+    from quant_trading.interface.services import generate_demo_bars
+    from quant_trading.model.instrument import InstrumentId
     from quant_trading.model.market import BarInterval
+
+    instrument_id = InstrumentId.from_str(symbol)
 
     settings = Settings.load()
     store = DataStore(settings.data.parquet_dir)
