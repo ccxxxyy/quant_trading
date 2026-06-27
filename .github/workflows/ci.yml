@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, master, dev]
 
+env:
+  UV_DEFAULT_INDEX: https://pypi.org/simple
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}

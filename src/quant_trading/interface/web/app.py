@@ -178,13 +178,18 @@ async def alpha_features():
 
 def main():
     """quant-web 命令的入口点。"""
+    import sys
+
     import uvicorn
+
+    # Windows 下 reload 会启动子进程，若依赖不完整容易报 websockets.legacy 等错误
+    use_reload = sys.platform != "win32"
 
     uvicorn.run(
         "quant_trading.interface.web.app:app",
         host="127.0.0.1",
         port=8888,
-        reload=True,
+        reload=use_reload,
     )
 
 

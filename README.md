@@ -278,8 +278,19 @@ uv sync --extra data --extra web --extra viz --extra dev
 
 ### 启动 Web 仪表盘
 
+**终端：**
+
+```powershell
+cd D:\PythonProjects\quant_trading
+.\start_web.ps1
+```
+
+**通用方式：**
+
 ```bash
 uv run quant-web
+# 或
+.venv\Scripts\python.exe -m uvicorn quant_trading.interface.web.app:app --host 127.0.0.1 --port 8888
 ```
 
 浏览器访问 **http://127.0.0.1:8888**
@@ -737,41 +748,45 @@ uv sync --extra gateway
 **第三步：在代码中使用**
 
 ```python
+import asyncio
+
 from quant_trading.gateway.ctp import CTPGateway
 from quant_trading.model.instrument import Exchange, InstrumentId
 
-# 方式一：快捷创建 SimNow 网关
-gateway = CTPGateway.create_simnow(
-    investor_id="你的SimNow账号",
-    password="你的密码",
-)
 
-# 方式二：从配置文件创建（适用于实盘）
-gateway = CTPGateway(
-    broker_id="9999",
-    investor_id="你的账号",
-    password="你的密码",
-    td_address="tcp://180.168.146.187:10130",
-    md_address="tcp://180.168.146.187:10131",
-    auth_code="0000000000000000",
-    app_id="simnow_client_test",
-)
+async def main():
+    # 方式一：快捷创建 SimNow 网关
+    gateway = CTPGateway.create_simnow(
+        investor_id="你的SimNow账号",
+        password="你的密码",
+    )
 
-# 连接
-await gateway.connect()
+    # 方式二：从配置文件创建（适用于实盘）
+    # gateway = CTPGateway(
+    #     broker_id="9999",
+    #     investor_id="你的账号",
+    #     password="你的密码",
+    #     td_address="tcp://180.168.146.187:10130",
+    #     md_address="tcp://180.168.146.187:10131",
+    #     auth_code="0000000000000000",
+    #     app_id="simnow_client_test",
+    # )
 
-# 订阅行情（以黄金和股指期货为例）
-await gateway.subscribe_market_data([
-    InstrumentId("au2412", Exchange.SHFE),    # 黄金期货
-    InstrumentId("IF2412", Exchange.CFFEX),   # 沪深300股指期货
-])
+    await gateway.connect()
 
-# 设置行情回调
-gateway.set_callbacks(on_tick=lambda tick: print(f"收到行情: {tick}"))
+    await gateway.subscribe_market_data([
+        InstrumentId("au2412", Exchange.SHFE),    # 黄金期货
+        InstrumentId("IF2412", Exchange.CFFEX),   # 沪深300股指期货
+    ])
 
-# 查询账户和持仓
-account = await gateway.query_account()
-positions = await gateway.query_positions()
+    gateway.set_callbacks(on_tick=lambda tick: print(f"收到行情: {tick}"))
+
+    account = await gateway.query_account()
+    positions = await gateway.query_positions()
+    print(account, positions)
+
+
+asyncio.run(main())
 ```
 
 > **未安装 CTP 库时**：网关自动以"桩模式"运行，所有方法可正常调用但不会实际连接服务器，适合做接口测试和开发调试。
@@ -779,24 +794,29 @@ positions = await gateway.query_positions()
 ### IB 盈透证券网关使用指南
 
 ```python
-from quant_trading.gateway.ibkr import IBGateway
-
-gateway = IBGateway(host="127.0.0.1", port=7497, client_id=1)
-await gateway.connect()
-
-# 提交美股订单
-from quant_trading.model.order import Order, OrderSide, OrderType
-from quant_trading.model.instrument import InstrumentId, Exchange
+import asyncio
 from decimal import Decimal
 
-order = Order(
-    instrument_id=InstrumentId("AAPL", Exchange.NASDAQ),
-    side=OrderSide.BUY,
-    order_type=OrderType.LIMIT,
-    quantity=100,
-    price=Decimal("150.00"),
-)
-await gateway.submit_order(order)
+from quant_trading.gateway.ibkr import IBGateway
+from quant_trading.model.instrument import Exchange, InstrumentId
+from quant_trading.model.order import Order, OrderSide, OrderType
+
+
+async def main():
+    gateway = IBGateway(host="127.0.0.1", port=7497, client_id=1)
+    await gateway.connect()
+
+    order = Order(
+        instrument_id=InstrumentId("AAPL", Exchange.NASDAQ),
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=100,
+        price=Decimal("150.00"),
+    )
+    await gateway.submit_order(order)
+
+
+asyncio.run(main())
 ```
 
 ---
