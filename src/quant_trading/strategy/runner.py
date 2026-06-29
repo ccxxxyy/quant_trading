@@ -116,9 +116,7 @@ class LiveStrategyRunner:
             strategy.on_init()
 
         self._running = True
-        logger.info(
-            f"LiveStrategyRunner started with {len(self._strategies)} strategies"
-        )
+        logger.info(f"LiveStrategyRunner started with {len(self._strategies)} strategies")
 
     async def stop(self) -> None:
         """停止运行器，通知所有策略清理。"""
@@ -192,9 +190,7 @@ class LiveStrategyRunner:
         try:
             key = str(order.instrument_id)
             if key in self._current_prices:
-                self._gateway.on_price_update(
-                    order.instrument_id, self._current_prices[key]
-                )
+                self._gateway.on_price_update(order.instrument_id, self._current_prices[key])
             order_id = await self._gateway.submit_order(order)
             logger.info(f"Order submitted to gateway: {order_id}")
 

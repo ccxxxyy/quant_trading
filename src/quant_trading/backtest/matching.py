@@ -144,9 +144,7 @@ class MatchingEngine:
         date_str = fill.timestamp.strftime("%Y-%m-%d")
         if key not in self._buy_date_qty:
             self._buy_date_qty[key] = {}
-        self._buy_date_qty[key][date_str] = (
-            self._buy_date_qty[key].get(date_str, 0) + fill.quantity
-        )
+        self._buy_date_qty[key][date_str] = self._buy_date_qty[key].get(date_str, 0) + fill.quantity
 
     def match_tick(self, tick: Tick) -> list[Fill]:
         """尝试用一个逐笔行情撮合所有挂起的订单。"""

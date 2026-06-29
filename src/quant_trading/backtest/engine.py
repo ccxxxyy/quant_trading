@@ -116,14 +116,10 @@ class BacktestEngine:
             pos = self._positions.get(key)
             if pos and pos.quantity > 0:
                 date_str = self._clock.now().strftime("%Y-%m-%d")
-                sellable = self._matching.get_sellable_quantity(
-                    key, date_str, pos.quantity
-                )
+                sellable = self._matching.get_sellable_quantity(key, date_str, pos.quantity)
                 if order.quantity > sellable:
                     order.status = OrderStatus.REJECTED
-                    order.reject_reason = (
-                        f"T+1: sellable={sellable}, requested={order.quantity}"
-                    )
+                    order.reject_reason = f"T+1: sellable={sellable}, requested={order.quantity}"
                     logger.info(f"T+1 reject: {order.reject_reason}")
                     self._orders.append(order)
                     return order.order_id
