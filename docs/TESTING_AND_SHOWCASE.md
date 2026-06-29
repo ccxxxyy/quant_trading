@@ -98,6 +98,8 @@
 | D-09 | AkShare 期货数据 | `uv run quant data fetch AU2412.SHFE --start 2024-01-01 --provider akshare` | 下载黄金期货数据 |
 | D-10 | yfinance 美股数据 | `uv run quant data fetch AAPL.NASDAQ --start 2024-01-01 --provider yfinance` | 下载苹果股票数据 |
 | D-11 | 列出本地数据 | `uv run quant data list` | 列出已下载的所有标的和条数 |
+| D-12 | 前复权加载 | `uv run python -c "from quant_trading.data.adjust import AdjustType, adjust_bars, detect_adjust_factors; from quant_trading.model.market import Bar, BarInterval; from quant_trading.model.instrument import InstrumentId, Exchange; from datetime import datetime; from decimal import Decimal; inst=InstrumentId('TEST',Exchange.SSE); bars=[Bar(inst,datetime(2024,1,i),BarInterval.DAILY,Decimal('10'),Decimal('11'),Decimal('9'),Decimal('10'),1000) for i in range(1,6)]; bars[2]=Bar(inst,datetime(2024,1,3),BarInterval.DAILY,Decimal('7'),Decimal('8'),Decimal('6.5'),Decimal('7.5'),1000); f=detect_adjust_factors(bars); adj=adjust_bars(bars,f,AdjustType.FORWARD); print(len(f), float(adj[0].close))"` | 检测到跳变并输出调整后的收盘价 |
+| D-13 | DataStore 复权参数 | `uv run python -c "from quant_trading.data.store import DataStore; from quant_trading.data.adjust import AdjustType; s=DataStore(); print(hasattr(s.load_bars,'__call__'), AdjustType.FORWARD.value)"` | load_bars 支持 adjust 参数 |
 
 ---
 
@@ -118,23 +120,27 @@
 | B-06 | 限价买入未成交 | `uv run pytest tests/unit/test_matching.py::TestMatchingEngine::test_limit_buy_no_fill_when_price_high` | 价格未到限价不成交 |
 | B-07 | 撤单 | `uv run pytest tests/unit/test_matching.py::TestMatchingEngine::test_cancel_order` | 成功撤销未成交订单 |
 | B-08 | 手续费计算 | `uv run pytest tests/unit/test_matching.py::TestMatchingEngine::test_commission_applied` | 成交回报包含正确手续费 |
+| B-09 | T+1 当日卖拒 | `uv run python -c "from quant_trading.backtest.matching import MatchingEngine; from quant_trading.model.instrument import InstrumentId, Exchange; from quant_trading.model.order import Order, OrderSide, OrderType; from quant_trading.model.market import Bar, BarInterval; from datetime import datetime; from decimal import Decimal; m=MatchingEngine(enable_t1=True); inst=InstrumentId('600519',Exchange.SSE); bar=Bar(inst,datetime(2024,6,1),BarInterval.DAILY,Decimal('100'),Decimal('101'),Decimal('99'),Decimal('100.5'),1000); buy=Order(inst,OrderSide.BUY,OrderType.MARKET,100); m.submit_order(buy); m.on_bar(bar); sell=Order(inst,OrderSide.SELL,OrderType.MARKET,100); m.submit_order(sell); m.on_bar(bar); print(buy.status.value, sell.status.value)"` | 买入成交、当日卖出被拒绝 |
+| B-10 | 卖出印花税 | `uv run python -c "from quant_trading.backtest.matching import MatchingEngine; from quant_trading.model.instrument import InstrumentId, Exchange; from quant_trading.model.order import Order, OrderSide, OrderType; from quant_trading.model.market import Bar, BarInterval; from datetime import datetime; from decimal import Decimal; m=MatchingEngine(stamp_tax_rate=0.0005); inst=InstrumentId('600519',Exchange.SSE); bar=Bar(inst,datetime(2024,6,1),BarInterval.DAILY,Decimal('100'),Decimal('101'),Decimal('99'),Decimal('100'),1000); o=Order(inst,OrderSide.SELL,OrderType.MARKET,100); m.submit_order(o); m.on_bar(bar); print(float(o.commission))"` | 卖出手续费含印花税 |
+| B-11 | 涨跌停过滤 | `uv run python -c "from quant_trading.backtest.matching import MatchingEngine; from quant_trading.model.instrument import InstrumentId, Exchange; from quant_trading.model.order import Order, OrderSide, OrderType; from quant_trading.model.market import Bar, BarInterval; from datetime import datetime; from decimal import Decimal; m=MatchingEngine(price_limit_pct=0.10); inst=InstrumentId('600519',Exchange.SSE); bar=Bar(inst,datetime(2024,6,1),BarInterval.DAILY,Decimal('100'),Decimal('110'),Decimal('100'),Decimal('110'),1000); buy=Order(inst,OrderSide.BUY,OrderType.MARKET,100); m.submit_order(buy); m.on_bar(bar); print(buy.status.value)"` | 涨停封板时买单不成交 |
 
 #### 4.3 绩效分析
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| B-09 | 基础指标计算 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_compute_basic_metrics` | 夏普、回撤等指标正确 |
-| B-10 | 含交易的分析 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_with_trades` | 胜率、盈亏比等交易指标正确 |
-| B-11 | 报告格式化 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_format_report` | 输出可读的文本报告 |
-| B-12 | 空曲线处理 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_empty_curve` | 不报错返回默认值 |
+| B-12 | 基础指标计算 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_compute_basic_metrics` | 夏普、回撤等指标正确 |
+| B-13 | 含交易的分析 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_with_trades` | 胜率、盈亏比等交易指标正确 |
+| B-14 | 报告格式化 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_format_report` | 输出可读的文本报告 |
+| B-15 | 空曲线处理 | `uv run pytest tests/unit/test_analyzer.py::TestBacktestAnalyzer::test_empty_curve` | 不报错返回默认值 |
 
 #### 4.4 回测集成测试
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| B-13 | 双均线策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_full_backtest_with_demo_data` | 完整回测流程通过 |
-| B-14 | RSI 策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_rsi_strategy_backtest` | 通过 |
-| B-15 | MACD 策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_macd_strategy_backtest` | 通过 |
-| B-16 | 海龟策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_turtle_strategy_backtest` | 通过 |
-| B-17 | 布林带策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_bollinger_strategy_backtest` | 通过 |
+| B-16 | 双均线策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_full_backtest_with_demo_data` | 完整回测流程通过 |
+| B-17 | RSI 策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_rsi_strategy_backtest` | 通过 |
+| B-18 | MACD 策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_macd_strategy_backtest` | 通过 |
+| B-19 | 海龟策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_turtle_strategy_backtest` | 通过 |
+| B-20 | 布林带策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_bollinger_strategy_backtest` | 通过 |
+| B-21 | A股增强回测 API | `POST /api/backtest/run` body 含 `"enable_t1":true,"adjust":"forward"` | 正常返回 metrics，无报错 |
 
 ---
 
@@ -169,27 +175,37 @@
 | R-03 | 集中度超限拦截 | `uv run pytest tests/unit/test_risk_engine.py::TestRiskEngine::test_order_rejected_position_concentration` | 订单被拒绝 |
 | R-04 | 风控禁用 | `uv run pytest tests/unit/test_risk_engine.py::TestRiskEngine::test_disabled_engine_passes_all` | 禁用后所有订单通过 |
 | R-05 | 下单频率限制 | `uv run pytest tests/unit/test_risk_engine.py::TestRiskEngine::test_order_frequency_limit` | 超频后被拒绝 |
+| R-06 | 紧急冻结拦截 | `uv run python -c "from quant_trading.risk.engine import RiskEngine; from quant_trading.model.account import Account; from quant_trading.model.instrument import InstrumentId, Exchange; from quant_trading.model.order import Order, OrderSide, OrderType; from decimal import Decimal; a=Account('d',Decimal('100000'),Decimal('100000')); e=RiskEngine(a); e.emergency_freeze(); o=Order(InstrumentId('600519',Exchange.SSE),OrderSide.BUY,OrderType.MARKET,10,Decimal('100')); r=e.pre_trade_check(o,{}); print(r.approved, e.get_status()['frozen'])"` | approved=False，frozen=True |
+| R-07 | 解除冻结 | 同上续接 `e.emergency_unfreeze(); print(e.get_status()['frozen'])` | frozen=False |
+| R-08 | 策略暂停 | `uv run python -c "from quant_trading.risk.engine import RiskEngine; from quant_trading.model.account import Account; from decimal import Decimal; e=RiskEngine(Account('d',Decimal('100000'),Decimal('100000'))); e.halt_strategies(); print(e.get_status()['strategies_halted'])"` | strategies_halted=True |
+| R-09 | 一键清仓信号 | `uv run python -c "from quant_trading.risk.engine import RiskEngine; from quant_trading.model.account import Account; from quant_trading.model.instrument import InstrumentId, Exchange; from decimal import Decimal; e=RiskEngine(Account('d',Decimal('100000'),Decimal('100000'))); pos={InstrumentId('600519',Exchange.SSE): type('P',(),{'quantity':100})()}; orders=e.close_all_positions(pos); print(len(orders), orders[0].side.value if orders else 'none')"` | 返回 sell 平仓订单列表 |
 
 #### 6.2 投资组合管理
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| R-06 | 初始权益 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_initial_equity` | 等于初始余额 |
-| R-07 | 加仓后权益 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_add_position_and_equity` | 权益 = 现金 + 持仓市值 |
-| R-08 | 持仓集中度 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_concentration` | 百分比计算正确 |
-| R-09 | 组合摘要 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_summary` | 返回完整字段 |
-| R-10 | 净敞口 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_net_exposure_long_short` | 多头 - 空头 = 净值 |
+| R-10 | 初始权益 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_initial_equity` | 等于初始余额 |
+| R-11 | 加仓后权益 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_add_position_and_equity` | 权益 = 现金 + 持仓市值 |
+| R-12 | 持仓集中度 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_concentration` | 百分比计算正确 |
+| R-13 | 组合摘要 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_summary` | 返回完整字段 |
+| R-14 | 净敞口 | `uv run pytest tests/unit/test_portfolio.py::TestPortfolioManager::test_net_exposure_long_short` | 多头 - 空头 = 净值 |
 
 #### 6.3 执行算法
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| R-11 | TWAP 拆单 | `uv run python -c "from quant_trading.execution.algorithms.twap import TWAPAlgorithm; from quant_trading.model.instrument import InstrumentId, Exchange; from quant_trading.model.order import OrderSide; t=TWAPAlgorithm(InstrumentId('TEST',Exchange.SSE), OrderSide.BUY, 1000, num_slices=5, interval_seconds=60); print(f'Slices: {t._num_slices}, Qty per slice: {t._slice_quantity}')"` | 1000 股拆成 5 份每份 200 |
-| R-12 | VWAP 拆单 | `uv run python scripts/test_new_modules.py` (VWAP 部分) | 按成交量比例分配子单 |
+| R-15 | TWAP 拆单 | `uv run python -c "from quant_trading.execution.algorithms.twap import TWAPAlgorithm; from quant_trading.model.instrument import InstrumentId, Exchange; from quant_trading.model.order import OrderSide; t=TWAPAlgorithm(InstrumentId('TEST',Exchange.SSE), OrderSide.BUY, 1000, num_slices=5, interval_seconds=60); print(f'Slices: {t._num_slices}, Qty per slice: {t._slice_quantity}')"` | 1000 股拆成 5 份每份 200 |
+| R-16 | VWAP 拆单 | `uv run python scripts/test_new_modules.py` (VWAP 部分) | 按成交量比例分配子单 |
 
 #### 6.4 监控告警
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| R-13 | 回撤告警 | `uv run python scripts/test_new_modules.py` (AlertManager 部分) | 超阈值时触发告警 |
-| R-14 | 告警计数和查询 | 同上 | `alert_count > 0`，`get_recent_alerts()` 返回告警列表 |
+| R-17 | 回撤告警 | `uv run python scripts/test_new_modules.py` (AlertManager 部分) | 超阈值时触发告警 |
+| R-18 | 告警计数和查询 | 同上 | `alert_count > 0`，`get_recent_alerts()` 返回告警列表 |
+
+#### 6.5 实时策略运行器
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| R-19 | 运行器启停 | `uv run python -c "from quant_trading.strategy.runner import LiveStrategyRunner; r=LiveStrategyRunner(); print(r.is_running)"` | 初始 is_running=False |
+| R-20 | Web 启停 API | `POST /api/live/start` → `GET /api/live/status` → `POST /api/live/stop` | running 状态随操作切换 |
 
 ---
 
@@ -292,53 +308,101 @@
 | W-21 | 特征计算 | `POST /api/alpha/compute?symbol=DEMO.SSE` | 返回 rows（最近 20 行）和 columns（含 momentum_5 等因子列） |
 | W-22 | 可用模型 | `GET /api/alpha/models` | 返回 models 列表，包含 lightgbm |
 
-#### 10.6 Web UI 页面（基础）
+#### 10.6 API 接口（紧急风控）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| W-23 | 总览页加载 | 浏览器打开首页 | 显示 4 个 KPI 卡片（标的数、策略数、资金、交易所） |
-| W-24 | KPI 可点击 | 点击任一 KPI 卡片 | 跳转到对应页面 |
-| W-25 | 数据管理页 | 点击"数据管理" | 显示数据源选择、标的输入、获取按钮 |
-| W-26 | 回测实验室 | 点击"回测实验室" | 显示策略选择、参数配置、运行按钮 |
-| W-27 | 回测运行 | 选择策略 → 运行回测 | 显示权益曲线、回撤图、指标面板、交易记录 |
-| W-28 | 策略对比 | 点击"策略对比" | 同时回测所有策略并显示对比表和图表 |
-| W-29 | 策略库页 | 点击"策略库" | 以卡片形式展示 7 个策略，每张有说明和参数 |
-| W-30 | 设置页 | 点击"系统设置" | 显示风控参数、回测配置、系统信息 |
-| W-31 | 初始资金自定义 | 在回测页修改资金为任意值（如 12345） | 回测使用自定义资金 |
-| W-32 | 演示数据开关 | 勾选/取消"使用演示数据" | 勾选时无需下载数据即可回测 |
+| W-23 | 风控状态 | `GET /api/risk/status` | 返回 frozen、strategies_halted、daily_pnl 等字段 |
+| W-24 | 紧急冻结 | `POST /api/risk/freeze` | status.frozen=true |
+| W-25 | 解除冻结 | `POST /api/risk/unfreeze` | status.frozen=false |
+| W-26 | 暂停策略 | `POST /api/risk/halt` | status.strategies_halted=true |
+| W-27 | 恢复策略 | `POST /api/risk/resume` | status.strategies_halted=false |
+| W-28 | 一键清仓 | `POST /api/risk/close-all`（需先模拟盘持仓） | 返回 closed 数量，并自动冻结 |
 
-#### 10.7 Web UI 页面（参数优化）
+#### 10.7 API 接口（实时策略）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| W-33 | 参数优化页导航 | 点击侧栏"参数优化" | 显示优化配置表单和结果面板 |
-| W-34 | 策略选择 → 参数范围自动生成 | 切换策略下拉 | 表单中自动出现该策略的参数搜索范围 |
-| W-35 | 运行优化 | 填写参数范围 → 点击"开始优化" | 结果表格显示参数组合排名（按 Sharpe 降序） |
-| W-36 | 最优 KPI 展示 | 优化完成后 | 顶部 KPI 显示最优 Sharpe、最优收益率、组合总数 |
+| W-29 | 运行器状态 | `GET /api/live/status` | 返回 running、strategy_id、symbol |
+| W-30 | 启动运行 | `POST /api/live/start?strategy_id=ma_cross&symbol=DEMO.SSE` | running=true |
+| W-31 | 推送测试 K 线 | `POST /api/live/feed?symbol=DEMO.SSE&price=105&volume=2000` | 返回 fed=true |
+| W-32 | 停止运行 | `POST /api/live/stop` | running=false |
 
-#### 10.8 Web UI 页面（监控告警）
+#### 10.8 API 接口（A 股增强回测）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| W-37 | 告警页导航 | 点击侧栏"监控告警" | 显示 4 个告警统计 KPI + 阈值配置 + 告警记录表 |
-| W-38 | 刷新告警 | 点击"刷新告警"按钮 | 告警列表重新加载 |
-| W-39 | 测试告警 | 点击"发送测试告警" | 告警表格新增一条 info 级别记录 |
-| W-40 | 告警级别徽章 | 查看告警记录 | critical 红色、warning 黄色、info 蓝色徽章 |
+| W-33 | T+1 回测 | `POST /api/backtest/run` body 含 `"enable_t1":true,"use_demo_data":true` | 正常返回 metrics |
+| W-34 | 前复权回测 | 同上 body 含 `"adjust":"forward"` | 正常返回 metrics |
 
-#### 10.9 Web UI 页面（模拟盘）
+#### 10.9 Web UI 页面（基础）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| W-41 | 模拟盘页导航 | 点击侧栏"模拟盘" | 显示 4 个账户 KPI + 下单面板 + 持仓/挂单表 |
-| W-42 | 重置模拟盘 | 点击"重置模拟盘" | 账户回到初始资金，持仓清空 |
-| W-43 | 市价买入 | 输入标的 → 买入 100 股 → 提交 | 持仓表出现该标的，可用资金减少 |
-| W-44 | 市价卖出 | 选择卖出 → 提交 | 持仓表更新，已实现盈亏显示 |
-| W-45 | 下单表单验证 | 切换市价/限价单类型 | 限价单时价格输入框可用 |
+| W-35 | 总览页加载 | 浏览器打开首页 | 显示 4 个 KPI 卡片（标的数、策略数、资金、交易所） |
+| W-36 | KPI 可点击 | 点击任一 KPI 卡片 | 跳转到对应页面 |
+| W-37 | 数据管理页 | 点击"数据管理" | 显示数据源选择、标的输入、获取按钮 |
+| W-38 | 回测实验室 | 点击"回测实验室" | 显示策略选择、参数配置、运行按钮 |
+| W-39 | 回测运行 | 选择策略 → 运行回测 | 显示权益曲线、回撤图、指标面板、交易记录 |
+| W-40 | 策略对比 | 点击"策略对比" | 同时回测所有策略并显示对比表和图表 |
+| W-41 | 策略库页 | 点击"策略库" | 以卡片形式展示 7 个策略，每张有说明和参数 |
+| W-42 | 设置页 | 点击"系统设置" | 显示风控参数、回测配置、系统信息 |
+| W-43 | 初始资金自定义 | 在回测页修改资金为任意值（如 12345） | 回测使用自定义资金 |
+| W-44 | 演示数据开关 | 勾选/取消"使用演示数据" | 勾选时无需下载数据即可回测 |
+| W-45 | 复权模式选择 | 回测页"复权模式"下拉切换 | 可选不复权/前复权/后复权 |
+| W-46 | T+1 开关 | 回测页勾选"T+1" | 勾选后当日买入次日才能卖出 |
 
-#### 10.10 Web UI 页面（AI 实验室）
+#### 10.10 Web UI 页面（参数优化）
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
-| W-46 | AI 实验室导航 | 点击侧栏"AI 实验室" | 显示因子表格 + 模型卡片 + 特征计算面板 |
-| W-47 | 因子列表 | 进入 AI 实验室 | 表格展示 7 个因子（momentum、volatility、rsi、volume_ratio） |
-| W-48 | 模型卡片 | 进入 AI 实验室 | 显示 LightGBM 模型卡片及"available"状态 |
-| W-49 | 特征计算 | 输入标的 → 点击"计算特征" | 表格展示最近 20 行数据，包含所有因子列 |
-| W-50 | 导航栏完整 | 查看侧栏 | 9 个导航按钮（总览/数据/回测/参数优化/监控告警/模拟盘/AI实验室/策略库/设置） |
+| W-47 | 参数优化页导航 | 点击侧栏"参数优化" | 显示优化配置表单和结果面板 |
+| W-48 | 策略选择 → 参数范围自动生成 | 切换策略下拉 | 表单中自动出现该策略的参数搜索范围 |
+| W-49 | 运行优化 | 填写参数范围 → 点击"开始优化" | 结果表格显示参数组合排名（按 Sharpe 降序） |
+| W-50 | 最优 KPI 展示 | 优化完成后 | 顶部 KPI 显示最优 Sharpe、最优收益率、组合总数 |
+
+#### 10.11 Web UI 页面（监控告警）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-51 | 告警页导航 | 点击侧栏"监控告警" | 显示 4 个告警统计 KPI + 阈值配置 + 告警记录表 |
+| W-52 | 刷新告警 | 点击"刷新告警"按钮 | 告警列表重新加载 |
+| W-53 | 测试告警 | 点击"发送测试告警" | 告警表格新增一条 info 级别记录 |
+| W-54 | 告警级别徽章 | 查看告警记录 | critical 红色、warning 黄色、info 蓝色徽章 |
+
+#### 10.12 Web UI 页面（模拟盘）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-55 | 模拟盘页导航 | 点击侧栏"模拟盘" | 显示 4 个账户 KPI + 下单面板 + 持仓/挂单表 |
+| W-56 | 重置模拟盘 | 点击"重置模拟盘" | 账户回到初始资金，持仓清空 |
+| W-57 | 市价买入 | 输入标的 → 买入 100 股 → 提交 | 持仓表出现该标的，可用资金减少 |
+| W-58 | 市价卖出 | 选择卖出 → 提交 | 持仓表更新，已实现盈亏显示 |
+| W-59 | 下单表单验证 | 切换市价/限价单类型 | 限价单时价格输入框可用 |
+
+#### 10.13 Web UI 页面（风控中心）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-60 | 风控中心导航 | 点击侧栏"风控中心" | 显示 4 个状态 KPI + 紧急操作按钮 + 风控详情 |
+| W-61 | 紧急冻结 | 点击"紧急冻结"按钮 | 账户状态变为"已冻结"（红色），toast 提示 |
+| W-62 | 解除冻结 | 点击"解除冻结"按钮 | 账户状态恢复"正常"（绿色） |
+| W-63 | 暂停策略 | 点击"暂停策略"按钮 | 策略状态变为"已暂停"（红色） |
+| W-64 | 恢复策略 | 点击"恢复策略"按钮 | 策略状态恢复"运行中"（绿色） |
+| W-65 | 一键清仓 | 点击"一键清仓" → 确认弹窗 | 显示清仓结果（平仓笔数、余额），自动冻结 |
+| W-66 | 风控状态详情 | 查看详情面板 | 展示 frozen、strategies_halted、enabled、daily_pnl 等字段 |
+| W-67 | 刷新状态 | 点击"刷新"按钮 | 所有 KPI 和详情面板数据更新 |
+
+#### 10.14 Web UI 页面（实时策略）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-68 | 实时策略导航 | 点击侧栏"实时策略" | 显示 4 个 KPI + 启动面板 + K 线推送面板 |
+| W-69 | 启动策略 | 选择策略、输入标的 → 点击"启动运行" | 运行状态变为"运行中"（绿色），显示策略名和标的 |
+| W-70 | 停止策略 | 点击"停止运行" | 运行状态变为"停止" |
+| W-71 | 推送 K 线 | 输入价格和成交量 → 点击"推送 K 线" | 推送记录列表新增一条，已接收 K 线数+1 |
+| W-72 | 推送记录滚动 | 连续推送多次 | 最新记录在最上方，最多显示 20 条 |
+| W-73 | 刷新状态 | 点击"刷新状态" | 所有 KPI 更新 |
+
+#### 10.15 Web UI 页面（AI 实验室）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-74 | AI 实验室导航 | 点击侧栏"AI 实验室" | 显示因子表格 + 模型卡片 + 特征计算面板 |
+| W-75 | 因子列表 | 进入 AI 实验室 | 表格展示 7 个因子（momentum、volatility、rsi、volume_ratio） |
+| W-76 | 模型卡片 | 进入 AI 实验室 | 显示 LightGBM 模型卡片及"available"状态 |
+| W-77 | 特征计算 | 输入标的 → 点击"计算特征" | 表格展示最近 20 行数据，包含所有因子列 |
+| W-78 | 导航栏完整 | 查看侧栏 | 11 个导航按钮（总览/数据/回测/参数优化/监控告警/模拟盘/风控中心/实时策略/AI实验室/策略库/设置） |
 
 ---
 
@@ -519,42 +583,25 @@ uv run quant-web
 
 ---
 
-### 展示九：Web API 接口
+### 展示九：Web 全功能演示
 
-```bash
-# 启动 Web 服务后，在另一个终端运行：
+**所有功能均可在浏览器中完成操作**，启动后访问 http://127.0.0.1:8888 即可使用：
 
-# 1. 健康检查
-curl http://127.0.0.1:8888/api/health
+| 序号 | 功能 | 对应页面 | 操作说明 |
+|------|------|---------|---------|
+| 1 | 系统总览 | 总览 | 查看 4 个 KPI 卡片，点击任一卡片跳转 |
+| 2 | 数据获取 | 数据管理 | 选数据源 → 输标的 → 点击获取 → K 线预览 |
+| 3 | 运行回测 | 回测实验室 | 选策略/复权/T+1 → 运行 → 查看曲线和指标 |
+| 4 | 策略对比 | 回测实验室 | 点击"策略对比" → 多策略横向比较 |
+| 5 | 参数优化 | 参数优化 | 选策略 → 自动生成搜索范围 → 运行 → 排名 |
+| 6 | 监控告警 | 监控告警 | 查看阈值/告警记录 → 发送测试告警 |
+| 7 | 模拟盘交易 | 模拟盘 | 重置 → 下单买入 → 查看持仓/挂单 |
+| 8 | 紧急风控 | 风控中心 | 冻结/解冻/暂停策略/一键清仓 |
+| 9 | 实时策略 | 实时策略 | 启动策略 → 推送 K 线 → 查看状态 → 停止 |
+| 10 | AI 因子 | AI 实验室 | 查看因子列表/模型 → 计算特征 |
+| 11 | 策略库 | 策略库 | 卡片式展示 → 一键跳转回测 |
 
-# 2. 查看所有策略
-curl http://127.0.0.1:8888/api/strategies
-
-# 3. 运行回测
-curl -X POST http://127.0.0.1:8888/api/backtest/run \
-  -H "Content-Type: application/json" \
-  -d '{"strategy":"dual_ma","symbol":"TEST.SSE","start":"2024-01-01","use_demo_data":true}'
-
-# 4. 参数优化
-curl -X POST http://127.0.0.1:8888/api/optimize/run \
-  -H "Content-Type: application/json" \
-  -d '{"strategy":"dual_ma","symbol":"TEST.SSE","start":"2023-01-01","param_grid":{"fast_period":[5,10],"slow_period":[20,30]},"use_demo_data":true}'
-
-# 5. 模拟盘下单
-curl -X POST http://127.0.0.1:8888/api/paper/connect -H "Content-Type: application/json" -d '{}'
-curl -X POST http://127.0.0.1:8888/api/paper/order \
-  -H "Content-Type: application/json" \
-  -d '{"symbol":"600519.SSE","side":"buy","order_type":"market","quantity":100}'
-
-# 6. AI 特征计算
-curl -X POST "http://127.0.0.1:8888/api/alpha/compute?symbol=DEMO.SSE"
-
-# 7. 监控告警
-curl http://127.0.0.1:8888/api/monitor/config
-curl -X POST http://127.0.0.1:8888/api/monitor/test
-```
-
-**展示效果**：全部 20 个 API 端点返回 JSON 格式数据，可被任何前端/脚本调用。
+**展示效果**：11 个页面覆盖系统所有功能，无需任何命令行操作。
 
 ---
 
@@ -590,11 +637,58 @@ result = engine.pre_trade_check(order_big, {})
 print(f"超大订单: {result}")  # approved=False, reason=单笔金额超限
 ```
 
-**展示效果**：直观演示风控引擎如何自动拦截超限订单。
+**展示效果**：直观演示风控引擎如何自动拦截超限订单，以及紧急冻结如何阻断所有新订单。
 
 ---
 
-### 展示十一：CTP 期货网关演示
+### 展示十一：A 股增强回测（复权 / T+1 / 涨跌停 / 印花税）
+
+**操作步骤：**
+
+1. 左侧点击 **「回测实验室」**
+2. 策略选 **双均线**，标的填 `600519.SSE`
+3. **复权模式**下拉选 **「前复权（推荐 A 股）」**
+4. 勾选 **「T+1（当日买入次日才能卖）」**
+5. 勾选 **「使用演示数据」** → 点击 **「运行回测」**
+6. 再取消 T+1 和复权，用同一策略再跑一次回测做对比
+
+**展示效果**：同一策略在 A 股规则下交易次数、手续费（含印花税）可能与默认模式不同，回测更贴近真实 A 股环境。页面上直接可看到差异。
+
+---
+
+### 展示十二：紧急风控与一键清仓
+
+**操作步骤：**
+
+1. 先在 **「模拟盘」** 页重置并买入 100 股茅台
+2. 切换到 **「风控中心」** 页
+3. 查看 4 个状态 KPI：账户状态=正常、策略状态=运行中
+4. 点击 **「紧急冻结」** → 账户状态变为红色"已冻结"
+5. 切回模拟盘尝试下单 → 应失败（被冻结拦截）
+6. 回到风控中心，点击 **「一键清仓」** → 确认弹窗 → 清仓结果面板显示平仓笔数和余额
+7. 点击 **「解除冻结」** → 账户恢复正常
+
+**展示效果**：直观演示实盘"保命"流程——异常时一键冻结 + 批量平仓，全部在界面完成，无需敲命令。
+
+---
+
+### 展示十三：实时策略运行器
+
+**操作步骤：**
+
+1. 左侧点击 **「实时策略」**
+2. 策略选择 **双均线**，标的填 `DEMO.SSE`
+3. 点击 **「启动运行」** → 运行状态变为绿色"运行中"
+4. 在右侧 **「手动推送 K 线」** 面板，输入价格 100、成交量 1000 → 点击 **「推送 K 线」**
+5. 多次推送不同价格（如 102、98、105）→ 推送记录列表实时滚动
+6. 观察"已接收 K 线"KPI 数字递增
+7. 点击 **「停止运行」** → 状态恢复为"停止"
+
+**展示效果**：策略在后台持续运行，推送 K 线后自动处理信号，全过程在页面完成。
+
+---
+
+### 展示十四：CTP 期货网关演示
 
 ```python
 # uv run python
@@ -640,7 +734,7 @@ asyncio.run(demo())
 
 ---
 
-### 展示十二：数据清洗管道演示
+### 展示十五：数据清洗管道演示
 
 ```python
 # uv run python
@@ -670,7 +764,7 @@ print(stats.summary())
 
 ---
 
-### 展示十三：55 项自动化测试
+### 展示十六：55 项自动化测试
 
 ```bash
 uv run pytest tests/ -v --tb=short
@@ -680,7 +774,7 @@ uv run pytest tests/ -v --tb=short
 
 ---
 
-### 展示十四：GitHub Actions CI/CD
+### 展示十七：GitHub Actions CI/CD
 
 **展示位置**：GitHub 仓库 → Actions 标签页
 
@@ -700,13 +794,13 @@ uv run pytest tests/ -v --tb=short
 | 支持交易所 | 10 个（SSE、SZSE、CFFEX、SHFE、DCE、CZCE、NYSE、NASDAQ、BINANCE、IB） |
 | 交易网关 | 4 个（模拟、模拟盘、CTP、IB） |
 | 绩效指标 | 10 项（收益率、年化、夏普、最大回撤、Calmar、胜率、盈亏比等） |
-| 风控检查 | 4 重（单笔限额、集中度、日亏损、频率） |
+| 风控检查 | 4 重事前检查 + 紧急冻结/清仓/策略暂停 |
 | 执行算法 | 2 种（TWAP、VWAP） |
 | AI 因子 | 4 类 7 个（动量×3、波动率×2、RSI、量比） |
-| Web API | 20 个端点 |
-| Web 页面 | 9 个（总览、数据、回测、参数优化、监控告警、模拟盘、AI实验室、策略库、设置） |
+| Web API | 30 个端点 |
+| Web 页面 | 11 个（总览、数据、回测、参数优化、监控告警、模拟盘、风控中心、实时策略、AI实验室、策略库、设置） |
 | CLI 命令 | 4 个（info、data fetch、data list、backtest） |
 | 单元测试 | 55 个用例 |
-| 功能测试项 | 50 项 Web 测试 + 80+ 项全系统测试 |
-| 展示场景 | 14 个（含 4 个新增 Web 交互场景） |
+| 功能测试项 | 62 项 Web 测试 + 95+ 项全系统测试 |
+| 展示场景 | 17 个（含 A 股增强、紧急风控、实时运行器） |
 | CI 矩阵 | 4 种环境（2 OS × 2 Python） |

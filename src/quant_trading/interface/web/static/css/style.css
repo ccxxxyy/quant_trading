@@ -592,6 +592,66 @@ body::before {
 /* Optimization rank highlight */
 .opt-rank-1 td { background: rgba(59,130,246,0.06); }
 
+/* Danger / Warning / Success buttons */
+.btn-danger {
+  background: var(--red);
+  color: white;
+}
+.btn-danger:hover { background: #dc2626; transform: translateY(-1px); }
+
+.btn-danger-outline {
+  background: transparent;
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+.btn-danger-outline:hover { background: rgba(239,68,68,0.1); }
+
+.btn-success {
+  background: var(--green);
+  color: white;
+}
+.btn-success:hover { background: #16a34a; transform: translateY(-1px); }
+
+.btn-warning {
+  background: var(--amber);
+  color: #1a1a1a;
+}
+.btn-warning:hover { background: #d97706; transform: translateY(-1px); }
+
+.btn-icon { margin-right: 0.4rem; }
+
+/* Risk action button grid */
+.risk-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+/* Live feed log */
+.feed-log {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.feed-item {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-base);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.feed-time { color: var(--text-muted); min-width: 70px; }
+.feed-symbol { color: var(--accent); min-width: 90px; }
+.feed-price { color: var(--green); min-width: 80px; }
+.feed-vol { color: var(--text-muted); }
+
 /* Responsive */
 @media (max-width: 1100px) {
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }

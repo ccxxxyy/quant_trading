@@ -14,7 +14,7 @@ from quant_trading.core.event import Event, EventBus, EventType
 from quant_trading.model.account import Account
 from quant_trading.model.instrument import Currency, InstrumentId
 from quant_trading.model.market import Bar
-from quant_trading.model.order import Fill, Order, OrderSide
+from quant_trading.model.order import Fill, Order, OrderSide, OrderStatus
 from quant_trading.model.position import Position
 
 logger = logging.getLogger(__name__)
@@ -33,16 +33,26 @@ class BacktestEngine:
         commission_rate: float = 0.0003,
         slippage_rate: float = 0.0001,
         settings: Settings | None = None,
+        enable_t1: bool = False,
+        stamp_tax_rate: float = 0.0005,
+        price_limit_pct: float = 0.10,
     ) -> None:
         config = settings.backtest if settings else BacktestConfig()
         self._initial_capital = initial_capital or config.initial_capital
         self._commission_rate = Decimal(str(commission_rate or config.default_commission))
         self._slippage_rate = Decimal(str(slippage_rate or config.default_slippage))
+        self._enable_t1 = enable_t1
 
         # 核心组件
         self._event_bus = EventBus()
         self._clock = SimulatedClock()
-        self._matching = MatchingEngine(self._commission_rate, self._slippage_rate)
+        self._matching = MatchingEngine(
+            self._commission_rate,
+            self._slippage_rate,
+            stamp_tax_rate=Decimal(str(stamp_tax_rate)),
+            enable_t1=enable_t1,
+            price_limit_pct=price_limit_pct,
+        )
         self._analyzer = BacktestAnalyzer()
 
         # 状态数据
@@ -100,7 +110,20 @@ class BacktestEngine:
         self._strategies.append(strategy)
 
     def submit_order(self, order: Order) -> str:
-        """将订单提交到模拟撮合引擎。"""
+        """将订单提交到模拟撮合引擎（含 T+1 检查）。"""
+        if self._enable_t1 and order.side == OrderSide.SELL:
+            key = str(order.instrument_id)
+            pos = self._positions.get(key)
+            if pos and pos.quantity > 0:
+                date_str = self._clock.now().strftime("%Y-%m-%d")
+                sellable = self._matching.get_sellable_quantity(key, date_str, pos.quantity)
+                if order.quantity > sellable:
+                    order.status = OrderStatus.REJECTED
+                    order.reject_reason = f"T+1: sellable={sellable}, requested={order.quantity}"
+                    logger.info(f"T+1 reject: {order.reject_reason}")
+                    self._orders.append(order)
+                    return order.order_id
+
         self._orders.append(order)
         self._matching.submit_order(order)
         event = Event(type=EventType.ORDER, data=order, timestamp=self._clock.now())
