@@ -160,6 +160,8 @@ async def backtest_run(req: BacktestRequest):
             capital=req.capital,
             params=req.params,
             use_demo_data=req.use_demo_data,
+            enable_t1=req.enable_t1,
+            adjust=req.adjust,
         )
         return result
     except ValueError as e:
@@ -383,6 +385,101 @@ def _serialize_position(pos: Any) -> dict:
     }
 
 
+# ── Emergency Risk Control APIs ────────────────────────────
+
+_risk_engine: Any = None
+
+
+def _get_risk_engine() -> Any:
+    global _risk_engine
+    if _risk_engine is None:
+        from quant_trading.risk.engine import RiskEngine
+
+        _risk_engine = RiskEngine()
+    return _risk_engine
+
+
+@app.get("/api/risk/status")
+async def risk_status():
+    """获取风控引擎当前状态。"""
+    engine = _get_risk_engine()
+    return engine.get_status()
+
+
+@app.post("/api/risk/freeze")
+async def risk_freeze():
+    """紧急冻结 - 拒绝所有新订单。"""
+    engine = _get_risk_engine()
+    engine.emergency_freeze()
+    return {"action": "freeze", "status": engine.get_status()}
+
+
+@app.post("/api/risk/unfreeze")
+async def risk_unfreeze():
+    """解除紧急冻结。"""
+    engine = _get_risk_engine()
+    engine.emergency_unfreeze()
+    return {"action": "unfreeze", "status": engine.get_status()}
+
+
+@app.post("/api/risk/halt")
+async def risk_halt_strategies():
+    """暂停所有策略。"""
+    engine = _get_risk_engine()
+    engine.halt_strategies()
+    return {"action": "halt_strategies", "status": engine.get_status()}
+
+
+@app.post("/api/risk/resume")
+async def risk_resume_strategies():
+    """恢复所有策略。"""
+    engine = _get_risk_engine()
+    engine.resume_strategies()
+    return {"action": "resume_strategies", "status": engine.get_status()}
+
+
+@app.post("/api/risk/close-all")
+async def risk_close_all():
+    """一键清仓 - 对模拟盘所有持仓发出市价平仓指令。"""
+    gw = _get_paper_gateway()
+    if not gw.is_connected:
+        await gw.connect()
+
+    positions = await gw.query_positions()
+    if not positions:
+        return {"action": "close_all", "closed": 0, "message": "No positions to close"}
+
+    closed = 0
+    for pos in positions:
+        if pos.is_flat:
+            continue
+        from quant_trading.model.order import Order, OrderSide, OrderType
+
+        side = OrderSide.SELL if pos.quantity > 0 else OrderSide.BUY
+        qty = abs(pos.quantity)
+        order = Order(
+            instrument_id=pos.instrument_id,
+            side=side,
+            order_type=OrderType.MARKET,
+            quantity=qty,
+            strategy_id="emergency_close",
+        )
+        gw.on_price_update(pos.instrument_id, pos.avg_cost)
+        await gw.submit_order(order)
+        closed += 1
+
+    engine = _get_risk_engine()
+    engine.emergency_freeze()
+
+    account = await gw.query_account()
+    return {
+        "action": "close_all",
+        "closed": closed,
+        "account": _serialize_account(account),
+        "risk_status": engine.get_status(),
+    }
+
+
 # ── AI Lab APIs ────────────────────────────────────────────
 
 
@@ -468,6 +565,82 @@ async def alpha_models():
             },
         ]
     }
+
+
+# ── Live Strategy Runner APIs ──────────────────────────────
+
+_live_runner: Any = None
+
+
+def _get_live_runner() -> Any:
+    global _live_runner
+    if _live_runner is None:
+        from quant_trading.strategy.runner import LiveStrategyRunner
+
+        _live_runner = LiveStrategyRunner(
+            gateway=_get_paper_gateway(),
+            risk_engine=_get_risk_engine(),
+        )
+    return _live_runner
+
+
+@app.get("/api/live/status")
+async def live_status():
+    """获取实时策略运行器状态。"""
+    runner = _get_live_runner()
+    return runner.get_status()
+
+
+@app.post("/api/live/start")
+async def live_start(strategy_id: str = "ma_cross", symbol: str = "DEMO.SSE"):
+    """启动实时策略运行。"""
+    runner = _get_live_runner()
+    if runner.running:
+        return {"status": "already_running", **runner.get_status()}
+
+    if strategy_id not in BUILTIN_STRATEGIES:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy: {strategy_id}")
+
+    strategy_cls = BUILTIN_STRATEGIES[strategy_id]["class"]
+    strategy = strategy_cls(strategy_id=strategy_id)
+    runner.add_strategy(strategy, [symbol])
+    await runner.start()
+    return {"status": "started", **runner.get_status()}
+
+
+@app.post("/api/live/stop")
+async def live_stop():
+    """停止实时策略运行。"""
+    global _live_runner
+    runner = _get_live_runner()
+    await runner.stop()
+    _live_runner = None
+    return {"status": "stopped"}
+
+
+@app.post("/api/live/feed")
+async def live_feed(symbol: str = "DEMO.SSE", price: float = 100.0, volume: int = 1000):
+    """手动推送一根模拟K线到运行器（用于测试）。"""
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.market import Bar, BarInterval
+
+    runner = _get_live_runner()
+    if not runner.running:
+        raise HTTPException(status_code=400, detail="Runner not started")
+
+    instrument_id = InstrumentId.from_str(symbol)
+    bar = Bar(
+        instrument_id=instrument_id,
+        timestamp=datetime.now(),
+        interval=BarInterval.MINUTE_1,
+        open=Decimal(str(price)),
+        high=Decimal(str(price * 1.001)),
+        low=Decimal(str(price * 0.999)),
+        close=Decimal(str(price)),
+        volume=volume,
+    )
+    runner.on_bar(bar)
+    return {"status": "fed", "bar_count": runner.bar_count, **runner.get_status()}
 
 
 # ── Entrypoint ─────────────────────────────────────────────

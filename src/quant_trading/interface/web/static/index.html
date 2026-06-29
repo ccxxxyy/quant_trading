@@ -39,6 +39,12 @@
         <button class="nav-item" data-page="paper">
           <span class="nav-icon">▶</span> 模拟盘
         </button>
+        <button class="nav-item" data-page="risk">
+          <span class="nav-icon">⛨</span> 风控中心
+        </button>
+        <button class="nav-item" data-page="live">
+          <span class="nav-icon">⏱</span> 实时策略
+        </button>
         <button class="nav-item" data-page="ailab">
           <span class="nav-icon">◆</span> AI 实验室
         </button>
@@ -198,6 +204,25 @@
                 <input type="number" name="capital" value="1000000" min="1000" step="1" placeholder="可输入任意金额，如 100000" />
               </div>
               <div id="strategy-params" class="strategy-params"></div>
+              <div class="form-row two-col">
+                <div>
+                  <label>复权模式</label>
+                  <select name="adjust">
+                    <option value="none">不复权（原始价格）</option>
+                    <option value="forward">前复权（推荐 A 股）</option>
+                    <option value="backward">后复权</option>
+                  </select>
+                </div>
+                <div>
+                  <label>A 股规则</label>
+                  <div style="margin-top:0.45rem">
+                    <label class="checkbox-label">
+                      <input type="checkbox" name="enable_t1" />
+                      T+1（当日买入次日才能卖）
+                    </label>
+                  </div>
+                </div>
+              </div>
               <label class="checkbox-label">
                 <input type="checkbox" name="use_demo_data" checked />
                 无本地数据时使用模拟数据（演示模式）
@@ -425,6 +450,146 @@
               </thead>
               <tbody></tbody>
             </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Risk Control Center -->
+      <section class="page" id="page-risk">
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi-card">
+            <div class="kpi-label">账户状态</div>
+            <div class="kpi-value" id="risk-frozen-status">正常</div>
+            <div class="kpi-desc">冻结后所有新订单将被自动拒绝</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">策略状态</div>
+            <div class="kpi-value" id="risk-halt-status">运行中</div>
+            <div class="kpi-desc">暂停后策略不再产生交易信号</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">当日盈亏</div>
+            <div class="kpi-value" id="risk-daily-pnl">-</div>
+            <div class="kpi-desc">当日已实现 + 未实现盈亏</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">今日下单</div>
+            <div class="kpi-value" id="risk-order-count">-</div>
+            <div class="kpi-desc">当日已提交订单笔数</div>
+          </div>
+        </div>
+
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header"><h3>紧急操作</h3></div>
+            <p class="panel-text" style="margin-bottom:1rem">出现异常时可一键冻结账户或清空持仓，保护资金安全。操作后可随时解除。</p>
+            <div class="risk-action-grid">
+              <button class="btn btn-danger btn-block" id="risk-freeze-btn">
+                <span class="btn-icon">⬡</span> 紧急冻结
+              </button>
+              <button class="btn btn-success btn-block" id="risk-unfreeze-btn">
+                <span class="btn-icon">✓</span> 解除冻结
+              </button>
+              <button class="btn btn-warning btn-block" id="risk-halt-btn">
+                <span class="btn-icon">⏸</span> 暂停策略
+              </button>
+              <button class="btn btn-primary btn-block" id="risk-resume-btn">
+                <span class="btn-icon">▶</span> 恢复策略
+              </button>
+            </div>
+            <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+              <button class="btn btn-danger-outline btn-block" id="risk-closeall-btn">
+                <span class="btn-icon">✕</span> 一键清仓（平掉所有持仓并冻结）
+              </button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>风控状态详情</h3>
+              <button class="btn btn-sm btn-ghost" id="risk-refresh-btn">刷新</button>
+            </div>
+            <div class="settings-grid" id="risk-status-detail"></div>
+            <div style="margin-top:1rem">
+              <div class="panel-header"><h3>清仓结果</h3></div>
+              <div id="risk-closeall-result" class="empty-state">暂无清仓操作</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Strategy Runner -->
+      <section class="page" id="page-live">
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi-card">
+            <div class="kpi-label">运行状态</div>
+            <div class="kpi-value" id="live-running-status">停止</div>
+            <div class="kpi-desc">策略是否在持续接收行情</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">当前策略</div>
+            <div class="kpi-value" id="live-strategy-id" style="font-size:1.2rem">-</div>
+            <div class="kpi-desc">正在运行的策略</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">绑定标的</div>
+            <div class="kpi-value" id="live-symbol" style="font-size:1.2rem">-</div>
+            <div class="kpi-desc">正在监听的交易品种</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">已接收 K 线</div>
+            <div class="kpi-value" id="live-bars-count">0</div>
+            <div class="kpi-desc">策略已处理的行情数据条数</div>
+          </div>
+        </div>
+
+        <div class="split-layout">
+          <div class="panel">
+            <div class="panel-header"><h3>启动策略</h3></div>
+            <form id="live-start-form" class="form">
+              <div class="form-row">
+                <label>策略</label>
+                <select name="strategy_id" id="live-strategy-select"></select>
+              </div>
+              <div class="form-row">
+                <label>标的代码</label>
+                <input type="text" name="symbol" value="DEMO.SSE" required />
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">启动运行</button>
+            </form>
+            <div style="margin-top:1rem">
+              <button class="btn btn-danger-outline btn-block" id="live-stop-btn">停止运行</button>
+            </div>
+            <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+              <button class="btn btn-ghost btn-block" id="live-refresh-btn">刷新状态</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header"><h3>手动推送 K 线（测试用）</h3></div>
+            <p class="panel-text" style="margin-bottom:1rem">在没有实时行情接入时，可手动推送模拟 K 线来验证策略逻辑是否正常响应。</p>
+            <form id="live-feed-form" class="form">
+              <div class="form-row">
+                <label>标的代码</label>
+                <input type="text" name="symbol" value="DEMO.SSE" required />
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>价格</label>
+                  <input type="number" name="price" value="100" step="0.01" required />
+                </div>
+                <div>
+                  <label>成交量</label>
+                  <input type="number" name="volume" value="1000" min="1" />
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">推送 K 线</button>
+            </form>
+            <div class="panel" style="margin-top:1rem;background:var(--bg-elevated)">
+              <div class="panel-header"><h3>推送记录</h3></div>
+              <div id="live-feed-log" class="feed-log">
+                <div class="empty-state">暂无推送记录</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

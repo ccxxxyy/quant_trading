@@ -162,14 +162,19 @@ def run_backtest(
     params: dict | None = None,
     use_demo_data: bool = False,
     settings: Settings | None = None,
+    enable_t1: bool = False,
+    adjust: str = "none",
 ) -> dict[str, Any]:
     """运行回测并返回结构化的结果。"""
+    from quant_trading.data.adjust import AdjustType
+
     settings = settings or Settings.load()
     instrument_id = InstrumentId.from_str(symbol)
     end = end or datetime.now()
 
+    adjust_type = AdjustType(adjust) if adjust != "none" else AdjustType.NONE
     store = DataStore(settings.data.parquet_dir)
-    bars = store.load_bars(instrument_id, BarInterval.DAILY, start, end)
+    bars = store.load_bars(instrument_id, BarInterval.DAILY, start, end, adjust=adjust_type)
     used_demo_data = False
 
     if not bars and use_demo_data:
@@ -182,6 +187,7 @@ def run_backtest(
         initial_capital=capital,
         commission_rate=settings.backtest.default_commission,
         slippage_rate=settings.backtest.default_slippage,
+        enable_t1=enable_t1,
     )
     engine.add_bar_data(instrument_id, bars)
 

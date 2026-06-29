@@ -13,6 +13,8 @@ const PAGE_META = {
   optimize: { title: "参数优化", desc: "网格搜索最优策略参数" },
   monitor: { title: "监控告警", desc: "系统告警与异常监控" },
   paper: { title: "模拟盘", desc: "虚拟资金实时交易模拟" },
+  risk: { title: "风控中心", desc: "紧急冻结、策略暂停、一键清仓" },
+  live: { title: "实时策略", desc: "实时策略运行、行情推送与监控" },
   ailab: { title: "AI 实验室", desc: "特征工程、模型训练与预测" },
   strategies: { title: "策略库", desc: "内置策略模板与参数说明" },
   settings: { title: "系统设置", desc: "风控参数与系统配置" },
@@ -343,6 +345,8 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
         capital: Number(fd.get("capital")),
         params,
         use_demo_data: fd.get("use_demo_data") === "on",
+        enable_t1: fd.get("enable_t1") === "on",
+        adjust: fd.get("adjust") || "none",
       }),
     });
 
@@ -865,6 +869,224 @@ document.getElementById("ai-compute-btn").addEventListener("click", async () => 
   }
 });
 
+// ── Risk Control Center ─────────────────────────────────────
+
+async function loadRiskStatus() {
+  try {
+    const data = await api("/risk/status");
+    const status = data.status || data;
+
+    const frozenEl = document.getElementById("risk-frozen-status");
+    if (status.frozen) {
+      frozenEl.textContent = "已冻结";
+      frozenEl.className = "kpi-value negative";
+    } else {
+      frozenEl.textContent = "正常";
+      frozenEl.className = "kpi-value positive";
+    }
+
+    const haltEl = document.getElementById("risk-halt-status");
+    if (status.strategies_halted) {
+      haltEl.textContent = "已暂停";
+      haltEl.className = "kpi-value negative";
+    } else {
+      haltEl.textContent = "运行中";
+      haltEl.className = "kpi-value positive";
+    }
+
+    const pnlEl = document.getElementById("risk-daily-pnl");
+    const pnl = status.daily_pnl ?? 0;
+    pnlEl.textContent = fmtNum(pnl, 2);
+    setMetricColor(pnlEl, pnl);
+
+    document.getElementById("risk-order-count").textContent = status.order_count ?? "-";
+
+    const detailEl = document.getElementById("risk-status-detail");
+    const displayMap = {
+      frozen: "账户冻结",
+      strategies_halted: "策略暂停",
+      enabled: "风控启用",
+      daily_pnl: "当日盈亏",
+      order_count: "下单笔数",
+      max_position_pct: "最大持仓比例",
+      max_single_order_pct: "最大单笔比例",
+      max_daily_loss_pct: "最大日亏损比例",
+      max_order_frequency: "最大下单频率",
+    };
+    detailEl.innerHTML = Object.entries(status)
+      .map(([k, v]) => {
+        const label = displayMap[k] || k;
+        let display = v;
+        if (typeof v === "boolean") display = v ? "是" : "否";
+        if (typeof v === "number" && v < 1 && v > 0) display = fmtPct(v);
+        return `<div class="setting-item"><div class="key">${label}</div><div class="val">${display}</div></div>`;
+      })
+      .join("");
+  } catch {
+    /* risk engine may not be initialized */
+  }
+}
+
+document.getElementById("risk-freeze-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/risk/freeze", { method: "POST" });
+    toast("已紧急冻结 — 所有新订单将被拒绝", "error");
+    await loadRiskStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("risk-unfreeze-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/risk/unfreeze", { method: "POST" });
+    toast("已解除冻结 — 恢复正常下单", "success");
+    await loadRiskStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("risk-halt-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/risk/halt", { method: "POST" });
+    toast("策略已暂停 — 不再产生新信号", "info");
+    await loadRiskStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("risk-resume-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/risk/resume", { method: "POST" });
+    toast("策略已恢复运行", "success");
+    await loadRiskStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("risk-closeall-btn").addEventListener("click", async () => {
+  if (!confirm("确认一键清仓？将平掉所有模拟盘持仓并冻结账户。")) return;
+  showLoading(true);
+  try {
+    const result = await api("/risk/close-all", { method: "POST" });
+    const el = document.getElementById("risk-closeall-result");
+    el.innerHTML = `
+      <div style="padding:0.75rem">
+        <p style="color:var(--red);font-weight:600;margin-bottom:0.5rem">清仓完成</p>
+        <p>平仓笔数：<strong>${result.closed ?? 0}</strong></p>
+        <p>账户余额：<strong>${fmtNum(result.account?.balance, 2)}</strong></p>
+        <p>账户已自动冻结</p>
+      </div>`;
+    toast(`一键清仓完成: 平仓 ${result.closed ?? 0} 笔`, "error");
+    await loadRiskStatus();
+    await refreshPaperState();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("risk-refresh-btn").addEventListener("click", async () => {
+  await loadRiskStatus();
+  toast("风控状态已刷新", "success");
+});
+
+// ── Live Strategy Runner ────────────────────────────────────
+
+let liveFeedLog = [];
+
+function populateLiveStrategySelect() {
+  const select = document.getElementById("live-strategy-select");
+  if (!select || !Object.keys(strategiesMeta).length) return;
+  select.innerHTML = Object.entries(strategiesMeta)
+    .map(([id, meta]) => `<option value="${id}">${meta.name} (${id})</option>`)
+    .join("");
+}
+
+async function loadLiveStatus() {
+  try {
+    const data = await api("/live/status");
+    const status = data.status || data;
+
+    const runEl = document.getElementById("live-running-status");
+    if (status.running) {
+      runEl.textContent = "运行中";
+      runEl.className = "kpi-value positive";
+    } else {
+      runEl.textContent = "停止";
+      runEl.className = "kpi-value";
+    }
+    document.getElementById("live-strategy-id").textContent = status.strategy_id || "-";
+    document.getElementById("live-symbol").textContent = status.symbol || "-";
+    document.getElementById("live-bars-count").textContent = status.bars_received ?? 0;
+  } catch {
+    /* live runner may not exist yet */
+  }
+}
+
+document.getElementById("live-start-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  showLoading(true);
+  try {
+    const strategyId = fd.get("strategy_id");
+    const symbol = fd.get("symbol");
+    await api(`/live/start?strategy_id=${encodeURIComponent(strategyId)}&symbol=${encodeURIComponent(symbol)}`, {
+      method: "POST",
+    });
+    toast(`实时策略已启动: ${strategyId} → ${symbol}`, "success");
+    liveFeedLog = [];
+    await loadLiveStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("live-stop-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/live/stop", { method: "POST" });
+    toast("实时策略已停止", "info");
+    await loadLiveStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("live-feed-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const symbol = fd.get("symbol");
+  const price = Number(fd.get("price"));
+  const volume = Number(fd.get("volume"));
+
+  try {
+    await api(`/live/feed?symbol=${encodeURIComponent(symbol)}&price=${price}&volume=${volume}`, {
+      method: "POST",
+    });
+    const now = new Date().toLocaleTimeString("zh-CN");
+    liveFeedLog.unshift({ time: now, symbol, price, volume });
+    if (liveFeedLog.length > 20) liveFeedLog.length = 20;
+
+    const logEl = document.getElementById("live-feed-log");
+    logEl.innerHTML = liveFeedLog
+      .map((l) => `<div class="feed-item">
+        <span class="feed-time">${l.time}</span>
+        <span class="feed-symbol">${l.symbol}</span>
+        <span class="feed-price">¥${fmtNum(l.price, 2)}</span>
+        <span class="feed-vol">Vol: ${fmtNum(l.volume, 0)}</span>
+      </div>`)
+      .join("");
+
+    toast(`K 线已推送: ${symbol} @ ¥${price}`, "success");
+    await loadLiveStatus();
+  } catch (err) { toast(err.message, "error"); }
+});
+
+document.getElementById("live-refresh-btn").addEventListener("click", async () => {
+  await loadLiveStatus();
+  toast("状态已刷新", "success");
+});
+
 // ── Init ───────────────────────────────────────────────────
 
 async function refreshSystemInfo() {
@@ -879,6 +1101,7 @@ async function refreshSystemInfo() {
   renderStrategyCards();
   populateStrategySelect();
   populateOptStrategySelect();
+  populateLiveStrategySelect();
 }
 
 async function init() {
@@ -891,6 +1114,8 @@ async function init() {
       loadAlerts(),
       loadMonitorConfig(),
       refreshPaperState(),
+      loadRiskStatus(),
+      loadLiveStatus(),
       loadAIFeatures(),
       loadAIModels(),
     ]);
@@ -912,6 +1137,8 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
       loadAlerts(),
       loadMonitorConfig(),
       refreshPaperState(),
+      loadRiskStatus(),
+      loadLiveStatus(),
       loadAIFeatures(),
       loadAIModels(),
     ]);

@@ -10,6 +10,7 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
+from quant_trading.data.adjust import AdjustType, adjust_bars
 from quant_trading.model.instrument import InstrumentId
 from quant_trading.model.market import Bar, BarInterval
 
@@ -80,6 +81,7 @@ class DataStore:
         interval: BarInterval,
         start: datetime | None = None,
         end: datetime | None = None,
+        adjust: AdjustType = AdjustType.NONE,
     ) -> list[Bar]:
         """从 Parquet 文件加载K线数据。"""
         path = self._get_path(instrument_id, interval)
@@ -113,6 +115,10 @@ class DataStore:
                     open_interest=row["open_interest"],
                 )
             )
+
+        if adjust != AdjustType.NONE:
+            bars = adjust_bars(bars, adjust_type=adjust)
+
         return bars
 
     def load_bars_df(

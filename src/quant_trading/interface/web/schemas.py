@@ -21,6 +21,8 @@ class BacktestRequest(BaseModel):
     capital: float = 1_000_000.0
     params: dict | None = None
     use_demo_data: bool = False
+    enable_t1: bool = False
+    adjust: str = "none"  # "none" / "forward" / "backward"
 
 
 class HealthResponse(BaseModel):
