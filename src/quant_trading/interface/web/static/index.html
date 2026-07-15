@@ -51,6 +51,9 @@
         <button class="nav-item" data-page="strategies">
           <span class="nav-icon">◎</span> 策略库
         </button>
+        <button class="nav-item" data-page="ops">
+          <span class="nav-icon">⛭</span> 运维中心
+        </button>
         <button class="nav-item" data-page="settings">
           <span class="nav-icon">⚙</span> 系统设置
         </button>
@@ -147,16 +150,20 @@
                     <option value="1h">小时</option>
                     <option value="5m">5 分钟</option>
                     <option value="1m">1 分钟</option>
+                    <option value="tick">Tick 逐笔</option>
                   </select>
                 </div>
                 <div>
                   <label>数据源</label>
                   <select name="provider">
-                    <option value="akshare">AkShare (A股/期货)</option>
+                    <option value="akshare">AkShare (A股/期货/指数/可转债)</option>
                     <option value="yfinance">yfinance (美股)</option>
                   </select>
                 </div>
               </div>
+              <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.5rem;color:var(--text-muted)">
+                标的代码示例：股票 600519.SSE / ETF 510300.SSE / 指数 000300.SSE / 可转债 113050.SSE / 期货 au2412.SHFE
+              </p>
               <button type="submit" class="btn btn-primary btn-block">获取并存储</button>
             </form>
           </div>
@@ -192,7 +199,7 @@
               <div class="form-row two-col">
                 <div>
                   <label>开始日期</label>
-                  <input type="date" name="start" value="2023-01-01" required />
+                  <input type="date" name="start" required />
                 </div>
                 <div>
                   <label>结束日期</label>
@@ -222,6 +229,11 @@
                     </label>
                   </div>
                 </div>
+              </div>
+              <div class="form-row">
+                <label>过户费率（万分之）</label>
+                <input type="number" name="transfer_fee_rate" value="0.2" min="0" step="0.1" />
+                <small style="color:var(--text-muted);font-size:0.75rem">2022年起沪深统一为万分之0.2，买卖双向收取</small>
               </div>
               <label class="checkbox-label">
                 <input type="checkbox" name="use_demo_data" checked />
@@ -269,6 +281,34 @@
           </div>
         </div>
 
+        <!-- Walk-Forward 防过拟合 -->
+        <div class="panel">
+          <div class="panel-header"><h3>Walk-Forward 防过拟合分析</h3></div>
+          <p class="panel-text" style="margin-bottom:1rem;font-size:0.85rem">将回测数据按滑动窗口切分为多段 In-Sample / Out-of-Sample，检验策略样本外是否依然有效。</p>
+          <form id="walkforward-form" class="form">
+            <div class="form-row two-col">
+              <div>
+                <label>训练窗口（天）</label>
+                <input type="number" name="in_sample_days" value="180" min="30" />
+              </div>
+              <div>
+                <label>测试窗口（天）</label>
+                <input type="number" name="out_sample_days" value="60" min="10" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">运行 Walk-Forward</button>
+          </form>
+          <div id="walkforward-result" class="empty-state" style="margin-top:1rem">运行回测后可使用 Walk-Forward 分析</div>
+          <div class="table-wrap" style="margin-top:0.75rem">
+            <table class="data-table" id="walkforward-table">
+              <thead>
+                <tr><th>窗口</th><th>训练期 Sharpe</th><th>测试期 Sharpe</th><th>测试期收益</th><th>效率比</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- 策略对比 -->
         <div class="panel compare-panel">
           <div class="panel-header">
@@ -305,7 +345,7 @@
                 <input type="text" name="symbol" value="600519.SSE" required />
               </div>
               <div class="form-row two-col">
-                <div><label>开始日期</label><input type="date" name="start" value="2023-01-01" required /></div>
+                <div><label>开始日期</label><input type="date" name="start" required /></div>
                 <div><label>结束日期</label><input type="date" name="end" /></div>
               </div>
               <div class="form-row">
@@ -370,6 +410,53 @@
             </div>
             <button class="btn btn-primary" id="mon-refresh-btn" style="margin-bottom:0.75rem;width:100%">刷新告警</button>
             <button class="btn btn-ghost" id="mon-test-btn" style="width:100%">发送测试告警</button>
+
+            <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+              <div class="panel-header"><h3>告警推送配置</h3></div>
+              <form id="push-config-form" class="form">
+                <div class="form-row">
+                  <label>推送通道</label>
+                  <select name="channel" id="push-channel-select">
+                    <option value="webhook">Webhook（企业微信/钉钉/飞书）</option>
+                    <option value="email">邮件（SMTP）</option>
+                  </select>
+                </div>
+                <div id="push-webhook-fields">
+                  <div class="form-row">
+                    <label>Webhook URL</label>
+                    <input type="text" name="url" placeholder="https://qyapi.weixin.qq.com/..." style="font-size:0.8rem" />
+                  </div>
+                  <div class="form-row">
+                    <label>平台</label>
+                    <select name="platform">
+                      <option value="wecom">企业微信</option>
+                      <option value="dingtalk">钉钉</option>
+                      <option value="feishu">飞书</option>
+                      <option value="generic">通用</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="push-email-fields" style="display:none">
+                  <div class="form-row">
+                    <label>SMTP 主机</label>
+                    <input type="text" name="smtp_host" placeholder="smtp.qq.com" />
+                  </div>
+                  <div class="form-row two-col">
+                    <div><label>端口</label><input type="number" name="smtp_port" value="465" /></div>
+                    <div><label>发件人</label><input type="text" name="sender" placeholder="bot@qq.com" /></div>
+                  </div>
+                  <div class="form-row two-col">
+                    <div><label>用户名</label><input type="text" name="username" placeholder="bot@qq.com" /></div>
+                    <div><label>密码/授权码</label><input type="password" name="password" /></div>
+                  </div>
+                  <div class="form-row">
+                    <label>收件人（逗号分隔）</label>
+                    <input type="text" name="recipients" placeholder="admin@example.com" />
+                  </div>
+                </div>
+                <button type="submit" class="btn btn-success btn-block">保存并测试推送</button>
+              </form>
+            </div>
           </div>
         </div>
         <div class="panel">
@@ -410,7 +497,12 @@
                 </div>
                 <div>
                   <label>类型</label>
-                  <select name="order_type"><option value="market">市价</option><option value="limit">限价</option></select>
+                  <select name="order_type">
+                    <option value="market">市价</option>
+                    <option value="limit">限价</option>
+                    <option value="trailing_stop">追踪止损</option>
+                    <option value="conditional">条件单</option>
+                  </select>
                 </div>
               </div>
               <div class="form-row two-col">
@@ -421,6 +513,33 @@
                 <div>
                   <label>价格（限价单）</label>
                   <input type="number" name="price" step="0.01" placeholder="市价单无需填写" />
+                </div>
+              </div>
+              <div id="trailing-stop-fields" style="display:none">
+                <div class="form-row two-col">
+                  <div>
+                    <label>追踪距离（元）</label>
+                    <input type="number" name="trail_offset" value="2.0" step="0.1" min="0.1" />
+                  </div>
+                  <div>
+                    <label>初始触发价</label>
+                    <input type="number" name="trigger_price" step="0.01" placeholder="可选" />
+                  </div>
+                </div>
+              </div>
+              <div id="conditional-fields" style="display:none">
+                <div class="form-row two-col">
+                  <div>
+                    <label>条件（价格>=）</label>
+                    <input type="number" name="cond_price" step="0.01" placeholder="触发价格" />
+                  </div>
+                  <div>
+                    <label>条件方向</label>
+                    <select name="cond_direction">
+                      <option value="above">价格突破（>=）</option>
+                      <option value="below">价格跌破（<=）</option>
+                    </select>
+                  </div>
                 </div>
               </div>
               <button type="submit" class="btn btn-primary btn-block">提交订单</button>
@@ -451,6 +570,71 @@
               <tbody></tbody>
             </table>
           </div>
+        </div>
+
+        <!-- TWAP/VWAP 执行算法 -->
+        <div class="panel">
+          <div class="panel-header"><h3>执行算法拆单（TWAP / VWAP）</h3></div>
+          <p class="panel-text" style="margin-bottom:1rem;font-size:0.85rem">将大单拆分为多个小单分时执行，降低市场冲击成本。TWAP 按时间均分，VWAP 按成交量分布拆单。</p>
+          <form id="algo-preview-form" class="form">
+            <div class="form-row two-col">
+              <div>
+                <label>算法</label>
+                <select name="algorithm">
+                  <option value="twap">TWAP（时间加权）</option>
+                  <option value="vwap">VWAP（成交量加权）</option>
+                </select>
+              </div>
+              <div>
+                <label>标的代码</label>
+                <input type="text" name="symbol" value="600519.SSE" />
+              </div>
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>方向</label>
+                <select name="side"><option value="buy">买入</option><option value="sell">卖出</option></select>
+              </div>
+              <div>
+                <label>总数量</label>
+                <input type="number" name="total_quantity" value="10000" min="100" />
+              </div>
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>切片数</label>
+                <input type="number" name="num_slices" value="10" min="2" max="100" />
+              </div>
+              <div>
+                <label>间隔（秒）</label>
+                <input type="number" name="interval_seconds" value="60" min="10" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">预览拆单方案</button>
+          </form>
+          <div class="table-wrap" style="margin-top:1rem">
+            <table class="data-table" id="algo-slices-table">
+              <thead>
+                <tr><th>切片#</th><th>数量</th><th>时间偏移/权重</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 券商网关 -->
+        <div class="panel">
+          <div class="panel-header"><h3>券商网关连接</h3></div>
+          <p class="panel-text" style="margin-bottom:1rem;font-size:0.85rem">模拟盘内置网关已自动连接；CTP/IB 等实盘网关需先配置连接信息。</p>
+          <div class="table-wrap" style="margin-bottom:1rem">
+            <table class="data-table" id="gateway-table">
+              <thead>
+                <tr><th>网关</th><th>类型</th><th>状态</th><th>备注</th><th>操作</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <button class="btn btn-ghost btn-block" id="gateway-refresh-btn">刷新网关状态</button>
         </div>
       </section>
 
@@ -515,6 +699,74 @@
             </div>
           </div>
         </div>
+
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header"><h3>浮亏自动减仓</h3></div>
+            <p class="panel-text" style="margin-bottom:1rem">当某标的浮亏超过阈值时，系统可自动生成减仓订单以控制风险。</p>
+            <form id="auto-reduce-form" class="form">
+              <div class="form-row two-col">
+                <div>
+                  <label>触发阈值（%）</label>
+                  <input type="number" name="threshold" value="8" min="1" max="50" step="1" />
+                </div>
+                <div>
+                  <label>减仓比例（%）</label>
+                  <input type="number" name="reduce_ratio" value="50" min="10" max="100" step="10" />
+                </div>
+              </div>
+              <button type="submit" class="btn btn-warning btn-block">检测浮亏 & 生成减仓单</button>
+            </form>
+            <div id="auto-reduce-result" class="empty-state" style="margin-top:1rem">暂无减仓建议</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header"><h3>仓位管理器</h3></div>
+            <p class="panel-text" style="margin-bottom:1rem">根据不同模式自动计算各标的目标仓位。</p>
+            <form id="position-sizer-form" class="form">
+              <div class="form-row">
+                <label>分配模式</label>
+                <select name="mode">
+                  <option value="equal_weight">等权分配（资金均分）</option>
+                  <option value="risk_parity">风险平价（按波动率倒数）</option>
+                  <option value="kelly">凯利公式（按胜率盈亏比）</option>
+                  <option value="fixed_amount">固定金额（每笔固定）</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>标的列表（逗号分隔）</label>
+                <input type="text" name="symbols" value="600519.SSE,000001.SSE,000858.SSE" />
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">计算目标仓位</button>
+            </form>
+            <div class="table-wrap" style="margin-top:1rem">
+              <table class="data-table" id="position-sizer-table">
+                <thead>
+                  <tr><th>标的</th><th>权重</th><th>目标金额</th><th>目标股数</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 事前四重风控规则 -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>事前四重风控规则</h3>
+            <button class="btn btn-sm btn-ghost" id="risk-rules-refresh-btn">刷新</button>
+          </div>
+          <p class="panel-text" style="margin-bottom:1rem;font-size:0.85rem">每笔订单提交前需通过以下四道检查；可在线调整阈值，实时生效。</p>
+          <div class="table-wrap">
+            <table class="data-table" id="risk-rules-table">
+              <thead>
+                <tr><th>规则</th><th>当前值</th><th>说明</th><th>修改</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="risk-rules-status" style="margin-top:0.75rem;font-size:0.8rem;color:var(--text-muted)"></div>
+        </div>
       </section>
 
       <!-- Live Strategy Runner -->
@@ -562,6 +814,35 @@
             <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
               <button class="btn btn-ghost btn-block" id="live-refresh-btn">刷新状态</button>
             </div>
+
+            <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+              <div class="panel-header"><h3>WebSocket 行情源</h3></div>
+              <p class="panel-text" style="margin-bottom:0.75rem;font-size:0.8rem">连接外部 WebSocket 行情源后，系统自动接收实时 K 线并驱动策略运行（含断线自动重连）。</p>
+              <form id="ws-connect-form" class="form">
+                <div class="form-row">
+                  <label>WebSocket URL</label>
+                  <input type="text" name="ws_url" value="ws://127.0.0.1:9999/ws/market" style="font-family:var(--mono);font-size:0.8rem" />
+                </div>
+                <div class="form-row">
+                  <label>标的列表（可空=自动取策略标的）</label>
+                  <input type="text" name="ws_symbols" placeholder="600519.SSE,000001.SSE" />
+                </div>
+                <button type="submit" class="btn btn-success btn-block">连接行情源</button>
+              </form>
+              <button class="btn btn-danger-outline btn-block" id="ws-disconnect-btn" style="margin-top:0.5rem">断开行情源</button>
+              <div style="margin-top:0.75rem">
+                <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);gap:0.5rem">
+                  <div class="kpi-card" style="padding:0.6rem">
+                    <div class="kpi-label" style="font-size:0.7rem">行情连接</div>
+                    <div class="kpi-value" id="ws-state" style="font-size:1rem">未连接</div>
+                  </div>
+                  <div class="kpi-card" style="padding:0.6rem">
+                    <div class="kpi-label" style="font-size:0.7rem">重连次数</div>
+                    <div class="kpi-value" id="ws-reconnects" style="font-size:1rem">0</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="panel">
@@ -591,6 +872,24 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- 活跃订单 (订单回调) -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>活跃订单（订单回调监控）</h3>
+            <button class="btn btn-sm btn-ghost" id="live-orders-refresh-btn">刷新</button>
+          </div>
+          <p class="panel-text" style="margin-bottom:0.75rem;font-size:0.85rem">策略下单后，可在此实时查看每笔订单的状态变化（创建 → 提交 → 成交/拒绝/撤销）。</p>
+          <div class="table-wrap">
+            <table class="data-table" id="live-orders-table">
+              <thead>
+                <tr><th>订单号</th><th>标的</th><th>方向</th><th>类型</th><th>数量</th><th>价格</th><th>状态</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="live-orders-empty" class="empty-state">暂无活跃订单</div>
         </div>
       </section>
 
@@ -633,6 +932,122 @@
       <!-- Strategies -->
       <section class="page" id="page-strategies">
         <div class="strategy-cards" id="strategy-cards"></div>
+      </section>
+
+      <!-- Ops Center -->
+      <section class="page" id="page-ops">
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi-card">
+            <div class="kpi-label">调度器状态</div>
+            <div class="kpi-value" id="ops-scheduler-running">停止</div>
+            <div class="kpi-desc">定时任务调度器</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">定时任务数</div>
+            <div class="kpi-value" id="ops-task-count">0</div>
+            <div class="kpi-desc">已注册的定时任务</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">守护器状态</div>
+            <div class="kpi-value" id="ops-guardian-running">停止</div>
+            <div class="kpi-desc">进程守护器</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">被守护进程</div>
+            <div class="kpi-value" id="ops-process-count">0</div>
+            <div class="kpi-desc">已注册的子进程数</div>
+          </div>
+        </div>
+
+        <div class="split-layout">
+          <!-- 定时任务调度器 -->
+          <div class="panel">
+            <div class="panel-header"><h3>定时任务调度器</h3></div>
+            <p class="panel-text" style="margin-bottom:0.75rem;font-size:0.8rem">管理盘前数据更新、盘后日报统计等周期性任务。支持交易日判断，按时自动执行。</p>
+            <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+              <button class="btn btn-success" id="ops-scheduler-start-btn">启动调度器</button>
+              <button class="btn btn-danger-outline" id="ops-scheduler-stop-btn">停止调度器</button>
+              <button class="btn btn-ghost" id="ops-refresh-btn">刷新状态</button>
+            </div>
+            <div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border)">
+              <div class="panel-header"><h3>添加定时任务</h3></div>
+              <form id="add-task-form" class="form">
+                <div class="form-row two-col">
+                  <div>
+                    <label>任务名称</label>
+                    <input type="text" name="name" placeholder="如：盘前同步数据" required />
+                  </div>
+                  <div>
+                    <label>类型</label>
+                    <select name="task_type">
+                      <option value="pre_market">盘前任务</option>
+                      <option value="post_market">盘后任务</option>
+                      <option value="interval">间隔任务</option>
+                      <option value="daily">每日定时</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-row two-col">
+                  <div>
+                    <label>执行时间（HH:MM）</label>
+                    <input type="text" name="run_time" value="09:15" placeholder="09:15" />
+                  </div>
+                  <div>
+                    <label>间隔（秒，仅间隔任务）</label>
+                    <input type="number" name="interval" value="60" min="5" />
+                  </div>
+                </div>
+                <button type="submit" class="btn btn-success btn-block">添加任务</button>
+              </form>
+            </div>
+            <div class="panel-header"><h3>任务列表</h3></div>
+            <div class="table-wrap">
+              <table class="data-table" id="ops-task-table">
+                <thead>
+                  <tr><th>任务名</th><th>类型</th><th>执行时间</th><th>已执行</th><th>错误</th><th>状态</th><th>操作</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 进程守护器 -->
+          <div class="panel">
+            <div class="panel-header"><h3>进程守护器</h3></div>
+            <p class="panel-text" style="margin-bottom:0.75rem;font-size:0.8rem">监控策略运行器、行情服务等子进程的健康状态，崩溃时自动重启（指数退避冷却）。</p>
+            <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+              <button class="btn btn-success" id="ops-guardian-start-btn">启动守护器</button>
+              <button class="btn btn-danger-outline" id="ops-guardian-stop-btn">停止守护器</button>
+            </div>
+            <div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border)">
+              <div class="panel-header"><h3>添加被守护进程</h3></div>
+              <form id="add-process-form" class="form">
+                <div class="form-row">
+                  <label>进程名称</label>
+                  <input type="text" name="name" placeholder="如：行情服务" required />
+                </div>
+                <div class="form-row">
+                  <label>启动命令</label>
+                  <input type="text" name="command" placeholder="如：python run_feed.py" required />
+                </div>
+                <div class="form-row">
+                  <label>最大重启次数</label>
+                  <input type="number" name="max_restarts" value="10" min="1" />
+                </div>
+                <button type="submit" class="btn btn-success btn-block">添加进程</button>
+              </form>
+            </div>
+            <div class="panel-header"><h3>进程列表</h3></div>
+            <div class="table-wrap">
+              <table class="data-table" id="ops-process-table">
+                <thead>
+                  <tr><th>进程名</th><th>状态</th><th>PID</th><th>运行时间</th><th>重启次数</th><th>上次崩溃</th><th>操作</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Settings -->

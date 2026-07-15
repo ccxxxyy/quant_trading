@@ -21,6 +21,8 @@ class OrderType(Enum):
     LIMIT = "limit"  # 限价单（指定价格，到价才成交）
     STOP = "stop"  # 止损单（价格触及止损价时触发）
     STOP_LIMIT = "stop_limit"  # 止损限价单（触及止损价后以限价挂单）
+    TRAILING_STOP = "trailing_stop"  # 追踪止损单（止损价跟随最优价格浮动）
+    CONDITIONAL = "conditional"  # 条件单（满足条件后自动触发）
 
 
 class OrderStatus(Enum):
@@ -60,6 +62,9 @@ class Order:
     strategy_id: str = ""  # 发出订单的策略ID
     broker_order_id: str = ""  # 券商返回的订单ID
     reject_reason: str = ""  # 拒绝原因
+    trailing_pct: Decimal = Decimal(0)  # 追踪止损百分比
+    condition_expr: str = ""  # 条件单表达式，如 "close > 100"
+    condition_met: bool = False  # 条件是否已触发
 
     @property
     def remaining_quantity(self) -> int:

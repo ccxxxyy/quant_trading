@@ -2,12 +2,14 @@
 
 回测只在历史数据上跑一次；本模块提供一个持续运行的循环，
 接收实时（或模拟）行情，调用策略的 on_bar/on_tick，再将订单路由到执行引擎。
+支持 WebSocket 行情源自动接入、断线重连、缺失补全。
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -64,6 +66,14 @@ class LiveStrategyRunner:
         self._strategies: list[tuple[BaseStrategy, list[str]]] = []
         self._running = False
         self._bar_count = 0
+
+        # WebSocket 行情源（可选）
+        self._ws_feed: Any = None
+        # 订单回调追踪
+        self._order_callbacks: dict[str, Callable[[Order, Fill | None], None]] = {}
+        self._active_orders: dict[str, Order] = {}
+        # 行情连接状态
+        self._feed_state: str = "disconnected"
 
     @property
     def running(self) -> bool:
@@ -200,6 +210,84 @@ class LiveStrategyRunner:
         except Exception as e:
             logger.error(f"Failed to submit order to gateway: {e}")
 
+    # ------------------------------------------------------------------
+    # WebSocket 实时行情接入
+    # ------------------------------------------------------------------
+
+    async def connect_websocket(
+        self,
+        url: str = "ws://127.0.0.1:9999/ws/market",
+        symbols: list[str] | None = None,
+    ) -> None:
+        """连接 WebSocket 行情源，自动将行情分发到策略。"""
+        from quant_trading.data.websocket_feed import WebSocketFeed
+
+        if symbols is None:
+            symbols = []
+            for _, insts in self._strategies:
+                symbols.extend(insts)
+            symbols = list(set(symbols))
+
+        self._ws_feed = WebSocketFeed(url=url)
+        self._ws_feed.on_bar = self.on_bar
+        self._ws_feed.on_connection_change = self._on_feed_state_change
+        self._ws_feed.on_gap_detected = self._on_gap_detected
+        await self._ws_feed.connect(symbols)
+        logger.info(f"WebSocket feed connected: {url}, symbols={symbols}")
+
+    async def disconnect_websocket(self) -> None:
+        """断开 WebSocket 行情源。"""
+        if self._ws_feed:
+            await self._ws_feed.disconnect()
+            self._ws_feed = None
+            self._feed_state = "disconnected"
+
+    def _on_feed_state_change(self, state: Any) -> None:
+        """处理行情连接状态变化。"""
+        self._feed_state = state.value if hasattr(state, "value") else str(state)
+        logger.info(f"Feed state changed: {self._feed_state}")
+
+    def _on_gap_detected(self, symbol: str, gap_seconds: float) -> None:
+        """行情缺失检测回调 — 可触发补全或告警。"""
+        logger.warning(f"Market data gap: {symbol} silent for {gap_seconds:.0f}s")
+
+    # ------------------------------------------------------------------
+    # 订单状态回调链路
+    # ------------------------------------------------------------------
+
+    def register_order_callback(
+        self,
+        order_id: str,
+        callback: Callable[[Order, Fill | None], None],
+    ) -> None:
+        """注册订单状态变更回调。"""
+        self._order_callbacks[order_id] = callback
+
+    def on_order_update(self, order: Order) -> None:
+        """处理来自网关的订单状态更新。
+
+        网关在订单状态变更（SUBMITTED→FILLED / REJECTED / CANCELLED）时
+        调用此方法，runner 分发给策略和已注册的回调。
+        """
+        self._active_orders[order.order_id] = order
+
+        cb = self._order_callbacks.get(order.order_id)
+        if cb:
+            try:
+                cb(order, None)
+            except Exception as e:
+                logger.error(f"Order callback error: {e}")
+
+        if order.is_completed:
+            self._order_callbacks.pop(order.order_id, None)
+            self._active_orders.pop(order.order_id, None)
+
+        logger.info(
+            f"Order update: {order.order_id[:8]} "
+            f"{order.side.value} {order.quantity} "
+            f"→ {order.status.value}"
+        )
+
     def on_fill(self, fill: Fill) -> None:
         """处理来自网关的成交回报。"""
         position = self.get_position(fill.instrument_id)
@@ -214,11 +302,24 @@ class LiveStrategyRunner:
 
         self._account.commission += fill.commission
 
+        # 触发订单回调
+        cb = self._order_callbacks.get(fill.order_id)
+        if cb:
+            order = self._active_orders.get(fill.order_id)
+            try:
+                cb(order, fill)
+            except Exception as e:
+                logger.error(f"Fill callback error: {e}")
+
         for strategy, _ in self._strategies:
             strategy.on_fill(fill)
 
     def get_status(self) -> dict:
         """返回运行器状态摘要。"""
+        ws_status = None
+        if self._ws_feed:
+            ws_status = self._ws_feed.get_status()
+
         return {
             "running": self._running,
             "bar_count": self._bar_count,
@@ -244,4 +345,7 @@ class LiveStrategyRunner:
                 "available": float(self._account.available),
             },
             "risk": self._risk_engine.get_status(),
+            "feed_state": self._feed_state,
+            "websocket": ws_status,
+            "active_orders": len(self._active_orders),
         }

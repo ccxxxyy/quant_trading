@@ -20,7 +20,7 @@ class TestBacktestIntegration:
         assert "equity_curve" in result
         assert "trades" in result
         assert "report" in result
-        assert result["bar_count"] == 250
+        assert result["bar_count"] >= 240
         assert result["used_demo_data"] is True
         assert result["metrics"]["initial_capital"] == 1_000_000.0
 

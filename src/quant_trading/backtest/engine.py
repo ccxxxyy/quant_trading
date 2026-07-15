@@ -35,6 +35,7 @@ class BacktestEngine:
         settings: Settings | None = None,
         enable_t1: bool = False,
         stamp_tax_rate: float = 0.0005,
+        transfer_fee_rate: float = 0.00002,
         price_limit_pct: float = 0.10,
     ) -> None:
         config = settings.backtest if settings else BacktestConfig()
@@ -50,6 +51,7 @@ class BacktestEngine:
             self._commission_rate,
             self._slippage_rate,
             stamp_tax_rate=Decimal(str(stamp_tax_rate)),
+            transfer_fee_rate=Decimal(str(transfer_fee_rate)),
             enable_t1=enable_t1,
             price_limit_pct=price_limit_pct,
         )

@@ -162,11 +162,15 @@ async def backtest_run(req: BacktestRequest):
             use_demo_data=req.use_demo_data,
             enable_t1=req.enable_t1,
             adjust=req.adjust,
+            transfer_fee_rate=req.transfer_fee_rate,
         )
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
+        import traceback
+
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
@@ -250,11 +254,9 @@ async def monitor_config():
 @app.post("/api/monitor/test")
 async def monitor_test_alert():
     """发送一条测试告警。"""
-    from quant_trading.monitoring.alert import AlertLevel, AlertManager, AlertType
+    from quant_trading.monitoring.alert import Alert, AlertLevel, AlertManager, AlertType
 
     manager = AlertManager()
-    from quant_trading.monitoring.alert import Alert
-
     manager.fire(
         Alert(
             alert_type=AlertType.CUSTOM,
@@ -263,6 +265,68 @@ async def monitor_test_alert():
         )
     )
     return {"alerts": manager.get_recent_alerts(10), "count": manager.alert_count}
+
+
+@app.post("/api/monitor/push-config")
+async def monitor_push_config(
+    channel: str = "webhook",
+    url: str = "",
+    platform: str = "wecom",
+    smtp_host: str = "",
+    smtp_port: int = 465,
+    username: str = "",
+    password: str = "",
+    sender: str = "",
+    recipients: str = "",
+):
+    """配置告警推送通道（Webhook 或 Email），并发送测试消息验证。"""
+    from quant_trading.monitoring.alert import (
+        Alert,
+        AlertLevel,
+        AlertManager,
+        AlertType,
+        EmailAlertHandler,
+        WebhookAlertHandler,
+    )
+
+    manager = AlertManager()
+
+    if channel == "webhook":
+        if not url:
+            raise HTTPException(status_code=400, detail="Webhook URL 不能为空")
+        handler = WebhookAlertHandler(url=url, platform=platform)
+        manager.add_handler(handler)
+        test_alert = Alert(
+            alert_type=AlertType.CUSTOM,
+            level=AlertLevel.INFO,
+            message=f"告警通道测试（{platform}）- 来自 Web 配置",
+        )
+        manager.fire(test_alert)
+        return {"status": "ok", "channel": "webhook", "platform": platform}
+
+    elif channel == "email":
+        if not smtp_host or not recipients:
+            raise HTTPException(status_code=400, detail="SMTP 主机和收件人不能为空")
+        rcpt_list = [r.strip() for r in recipients.split(",") if r.strip()]
+        handler = EmailAlertHandler(
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            use_ssl=True,
+            username=username,
+            password=password,
+            sender=sender or username,
+            recipients=rcpt_list,
+        )
+        manager.add_handler(handler)
+        test_alert = Alert(
+            alert_type=AlertType.CUSTOM,
+            level=AlertLevel.INFO,
+            message="告警通道测试（邮件）- 来自 Web 配置",
+        )
+        manager.fire(test_alert)
+        return {"status": "ok", "channel": "email", "recipients": rcpt_list}
+
+    raise HTTPException(status_code=400, detail=f"Unknown channel: {channel}")
 
 
 # ── Paper Trading APIs ─────────────────────────────────────
@@ -316,7 +380,13 @@ async def paper_submit_order(req: PaperOrderRequest):
 
     instrument_id = InstrumentId.from_str(req.symbol)
     side = OrderSide.BUY if req.side.lower() == "buy" else OrderSide.SELL
-    order_type = OrderType.MARKET if req.order_type.lower() == "market" else OrderType.LIMIT
+    type_map = {
+        "market": OrderType.MARKET,
+        "limit": OrderType.LIMIT,
+        "trailing_stop": OrderType.TRAILING_STOP,
+        "conditional": OrderType.CONDITIONAL,
+    }
+    order_type = type_map.get(req.order_type.lower(), OrderType.LIMIT)
 
     order = Order(
         instrument_id=instrument_id,
@@ -325,9 +395,20 @@ async def paper_submit_order(req: PaperOrderRequest):
         quantity=req.quantity,
         price=Decimal(str(req.price)) if req.price else Decimal(0),
     )
+    if order_type == OrderType.TRAILING_STOP:
+        if req.trigger_price is not None:
+            order.stop_price = Decimal(str(req.trigger_price))
+        elif req.trail_offset is not None:
+            order.stop_price = Decimal(str(req.trail_offset))
+    elif order_type == OrderType.CONDITIONAL and req.cond_price is not None:
+        op = "<=" if (req.cond_direction or "above") == "below" else ">="
+        order.condition_expr = f"close {op} {req.cond_price}"
 
     if order_type == OrderType.MARKET:
         gw.on_price_update(instrument_id, Decimal("100.00"))
+    elif order_type in (OrderType.TRAILING_STOP, OrderType.CONDITIONAL):
+        price = gw._latest_prices.get(str(instrument_id), Decimal("100.00"))
+        gw.on_price_update(instrument_id, price)
 
     order_id = await gw.submit_order(order)
     account = await gw.query_account()
@@ -436,6 +517,99 @@ async def risk_resume_strategies():
     engine = _get_risk_engine()
     engine.resume_strategies()
     return {"action": "resume_strategies", "status": engine.get_status()}
+
+
+@app.get("/api/risk/auto-reduce")
+async def risk_auto_reduce(threshold: float = 0.08, reduce_ratio: float = 0.50):
+    """检测浮亏并返回需要自动减仓的订单（不自动执行，供前端确认）。"""
+    gw = _get_paper_gateway()
+    if not gw.is_connected:
+        await gw.connect()
+    positions = await gw.query_positions()
+    if not positions:
+        return {"orders": [], "message": "No positions"}
+
+    pos_dict: dict[str, Any] = {}
+    price_dict: dict[str, Decimal] = {}
+    for p in positions:
+        key = str(p.instrument_id)
+        pos_dict[key] = p
+        price_dict[key] = p.avg_cost
+
+    engine = _get_risk_engine()
+    orders = engine.check_unrealized_loss(pos_dict, price_dict, threshold, reduce_ratio)
+    return {
+        "orders": [
+            {
+                "instrument_id": str(o.instrument_id),
+                "side": o.side.value,
+                "quantity": o.quantity,
+            }
+            for o in orders
+        ],
+        "threshold_pct": threshold,
+        "reduce_ratio": reduce_ratio,
+    }
+
+
+@app.get("/api/position-sizer/config")
+async def position_sizer_config():
+    """获取仓位管理器当前配置。"""
+    sizer = _get_position_sizer()
+    return sizer.get_config()
+
+
+@app.post("/api/position-sizer/calculate")
+async def position_sizer_calculate(
+    mode: str = "equal_weight",
+    symbols: str = "600519.SSE,000001.SSE",
+):
+    """根据指定模式计算各标的目标仓位。"""
+    from quant_trading.risk.position_sizer import SizingMode
+
+    sizer = _get_position_sizer()
+    try:
+        sizer.mode = SizingMode(mode)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {mode}")
+
+    gw = _get_paper_gateway()
+    if not gw.is_connected:
+        await gw.connect()
+    account = await gw.query_account()
+
+    instrument_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    prices = {s: 100.0 for s in instrument_list}
+    results = sizer.calculate(
+        total_equity=float(account.balance),
+        instruments=instrument_list,
+        current_prices=prices,
+    )
+    return {
+        "mode": mode,
+        "equity": float(account.balance),
+        "results": [
+            {
+                "instrument": r.instrument_key,
+                "weight": round(r.weight, 4),
+                "target_value": round(r.target_value, 2),
+                "target_quantity": r.target_quantity,
+            }
+            for r in results
+        ],
+    }
+
+
+_position_sizer: Any = None
+
+
+def _get_position_sizer() -> Any:
+    global _position_sizer
+    if _position_sizer is None:
+        from quant_trading.risk.position_sizer import PositionSizer
+
+        _position_sizer = PositionSizer()
+    return _position_sizer
 
 
 @app.post("/api/risk/close-all")
@@ -613,9 +787,45 @@ async def live_stop():
     """停止实时策略运行。"""
     global _live_runner
     runner = _get_live_runner()
+    await runner.disconnect_websocket()
     await runner.stop()
     _live_runner = None
     return {"status": "stopped"}
+
+
+@app.post("/api/live/ws-connect")
+async def live_ws_connect(
+    url: str = "ws://127.0.0.1:9999/ws/market",
+    symbols: str = "",
+):
+    """连接 WebSocket 实时行情源。"""
+    runner = _get_live_runner()
+    if not runner.running:
+        raise HTTPException(status_code=400, detail="Runner not started, start a strategy first")
+
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()] or None
+    await runner.connect_websocket(url=url, symbols=sym_list)
+    return {"status": "ws_connected", **runner.get_status()}
+
+
+@app.post("/api/live/ws-disconnect")
+async def live_ws_disconnect():
+    """断开 WebSocket 实时行情源。"""
+    runner = _get_live_runner()
+    await runner.disconnect_websocket()
+    return {"status": "ws_disconnected", **runner.get_status()}
+
+
+@app.get("/api/live/ws-status")
+async def live_ws_status():
+    """获取 WebSocket 行情源状态。"""
+    runner = _get_live_runner()
+    status = runner.get_status()
+    return {
+        "feed_state": status.get("feed_state", "disconnected"),
+        "websocket": status.get("websocket"),
+        "active_orders": status.get("active_orders", 0),
+    }
 
 
 @app.post("/api/live/feed")
@@ -643,14 +853,431 @@ async def live_feed(symbol: str = "DEMO.SSE", price: float = 100.0, volume: int 
     return {"status": "fed", "bar_count": runner.bar_count, **runner.get_status()}
 
 
+# ── Scheduler APIs ────────────────────────────────────────
+
+_scheduler: Any = None
+
+
+def _get_scheduler() -> Any:
+    global _scheduler
+    if _scheduler is None:
+        from datetime import time
+
+        from quant_trading.core.scheduler import TaskScheduler
+
+        _scheduler = TaskScheduler()
+
+        async def _noop_pre():
+            pass
+
+        async def _noop_post():
+            pass
+
+        _scheduler.add_pre_market("盘前数据更新", _noop_pre, run_time=time(9, 15))
+        _scheduler.add_post_market("盘后日报统计", _noop_post, run_time=time(15, 30))
+    return _scheduler
+
+
+@app.get("/api/scheduler/status")
+async def scheduler_status():
+    """获取定时任务调度器状态。"""
+    return _get_scheduler().get_status()
+
+
+@app.post("/api/scheduler/start")
+async def scheduler_start():
+    """启动定时任务调度器。"""
+    s = _get_scheduler()
+    if s.running:
+        return {"status": "already_running", **s.get_status()}
+    await s.start()
+    return {"status": "started", **s.get_status()}
+
+
+@app.post("/api/scheduler/stop")
+async def scheduler_stop():
+    """停止定时任务调度器。"""
+    s = _get_scheduler()
+    await s.stop()
+    return {"status": "stopped"}
+
+
+@app.post("/api/scheduler/run")
+async def scheduler_run_task(task_name: str):
+    """手动立即执行指定定时任务。"""
+    return await _get_scheduler().run_task_now(task_name)
+
+
+# ── Guardian APIs ─────────────────────────────────────────
+
+_guardian: Any = None
+
+
+def _get_guardian() -> Any:
+    global _guardian
+    if _guardian is None:
+        import sys
+
+        from quant_trading.core.guardian import ProcessGuardian
+
+        _guardian = ProcessGuardian()
+        python = sys.executable
+        _guardian.add_process(
+            name="quant-web",
+            command=[
+                python,
+                "-m",
+                "uvicorn",
+                "quant_trading.interface.web.app:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8889",
+            ],
+            max_restarts=5,
+            health_url="http://127.0.0.1:8889/api/health",
+        )
+    return _guardian
+
+
+@app.get("/api/guardian/status")
+async def guardian_status():
+    """获取进程守护器状态。"""
+    return _get_guardian().get_status()
+
+
+@app.post("/api/guardian/start")
+async def guardian_start():
+    """启动进程守护器。"""
+    g = _get_guardian()
+    if g.running:
+        return {"status": "already_running", **g.get_status()}
+    await g.start()
+    return {"status": "started", **g.get_status()}
+
+
+@app.post("/api/guardian/stop")
+async def guardian_stop():
+    """停止进程守护器（终止所有被守护进程）。"""
+    g = _get_guardian()
+    await g.stop()
+    return {"status": "stopped"}
+
+
+@app.post("/api/guardian/restart")
+async def guardian_restart_process(name: str):
+    """手动重启指定被守护进程。"""
+    return await _get_guardian().restart_process(name)
+
+
+@app.get("/api/guardian/health")
+async def guardian_health(name: str):
+    """检查指定进程健康状态。"""
+    return await _get_guardian().check_health(name)
+
+
+# ── Walk-Forward API ──────────────────────────────────────
+
+
+@app.post("/api/walkforward/run")
+async def walkforward_run(
+    strategy: str = "dual_ma",
+    symbol: str = "DEMO.SSE",
+    start: str = "2022-01-01",
+    end: str = "2024-01-01",
+    train_days: int = 180,
+    test_days: int = 30,
+    capital: float = 1_000_000.0,
+    use_demo_data: bool = True,
+):
+    """运行 Walk-Forward 滚动验证。"""
+    from quant_trading.alpha.walkforward import WalkForwardValidator
+
+    validator = WalkForwardValidator(
+        strategy_id=strategy,
+        symbol=symbol,
+        train_days=train_days,
+        test_days=test_days,
+        capital=capital,
+    )
+    s = datetime.strptime(start, "%Y-%m-%d")
+    e = datetime.strptime(end, "%Y-%m-%d")
+    result = validator.run(start=s, end=e, use_demo_data=use_demo_data)
+    return {
+        **result.summary(),
+        "windows": [
+            {
+                "id": w.window_id,
+                "train": f"{w.train_start:%Y-%m-%d} ~ {w.train_end:%Y-%m-%d}",
+                "test": f"{w.test_start:%Y-%m-%d} ~ {w.test_end:%Y-%m-%d}",
+                "return": round(w.test_return, 4),
+                "sharpe": round(w.test_sharpe, 4),
+            }
+            for w in result.windows
+        ],
+    }
+
+
+# ── Execution Algorithm APIs ─────────────────────────────
+
+
+@app.post("/api/algo/preview")
+async def algo_preview(
+    algorithm: str = "twap",
+    symbol: str = "600519.SSE",
+    side: str = "buy",
+    total_quantity: int = 10000,
+    num_slices: int = 10,
+    interval_seconds: int = 60,
+):
+    """预览执行算法拆单方案（TWAP/VWAP）。"""
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.order import OrderSide
+
+    iid = InstrumentId.from_str(symbol)
+    order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+
+    if algorithm == "twap":
+        from quant_trading.execution.algorithms.twap import TWAPAlgorithm
+
+        duration_min = max(1, (num_slices * interval_seconds) // 60)
+        algo = TWAPAlgorithm(
+            instrument_id=iid,
+            side=order_side,
+            total_quantity=total_quantity,
+            duration_minutes=duration_min,
+            num_slices=num_slices,
+        )
+        slice_qty = algo._slice_quantity
+        remainder = algo._remainder
+        slices_out = []
+        for i in range(num_slices):
+            q = slice_qty + (remainder if i == num_slices - 1 else 0)
+            slices_out.append({"index": i, "quantity": q, "time_offset": i * interval_seconds})
+    elif algorithm == "vwap":
+        from quant_trading.execution.algorithms.vwap import VWAPAlgorithm
+
+        algo = VWAPAlgorithm(
+            instrument_id=iid,
+            side=order_side,
+            total_quantity=total_quantity,
+            num_slices=num_slices,
+        )
+        slices_out = [
+            {"index": s.slice_index, "quantity": s.quantity, "volume_pct": round(s.volume_pct, 4)}
+            for s in algo.slices
+        ]
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown algorithm: {algorithm}")
+
+    return {
+        "algorithm": algorithm,
+        "symbol": symbol,
+        "side": side,
+        "total_quantity": total_quantity,
+        "num_slices": len(slices_out),
+        "slices": slices_out,
+    }
+
+
+# ── Risk Rules API ───────────────────────────────────────
+
+
+@app.get("/api/risk/rules")
+async def risk_rules():
+    """获取事前风控四重规则配置。"""
+    re = _get_risk_engine()
+    return {
+        "rules": [
+            {
+                "name": "单标的持仓比例上限",
+                "key": "max_position_pct",
+                "value": float(re._max_position_pct),
+                "desc": "单标的持仓市值不超过总权益的此比例",
+            },
+            {
+                "name": "单笔下单比例上限",
+                "key": "max_single_order_pct",
+                "value": float(re._max_single_order_pct),
+                "desc": "单笔下单金额不超过总资金的此比例",
+            },
+            {
+                "name": "下单频率上限",
+                "key": "max_order_frequency",
+                "value": re._max_order_frequency,
+                "desc": "每分钟最大下单笔数",
+            },
+            {
+                "name": "日亏损比例阈值",
+                "key": "max_daily_loss_pct",
+                "value": float(re._max_daily_loss_pct),
+                "desc": "当日亏损达到此比例时冻结账户",
+            },
+        ],
+        "frozen": re.is_frozen,
+        "strategies_halted": re.strategies_halted,
+    }
+
+
+@app.post("/api/risk/rules/update")
+async def risk_rules_update(
+    max_position_pct: float | None = None,
+    max_single_order_pct: float | None = None,
+    max_order_frequency: int | None = None,
+    max_daily_loss_pct: float | None = None,
+):
+    """更新事前风控规则阈值。"""
+    from decimal import Decimal
+
+    re = _get_risk_engine()
+    if max_position_pct is not None:
+        re._max_position_pct = Decimal(str(max_position_pct))
+    if max_single_order_pct is not None:
+        re._max_single_order_pct = Decimal(str(max_single_order_pct))
+    if max_order_frequency is not None:
+        re._max_order_frequency = max_order_frequency
+    if max_daily_loss_pct is not None:
+        re._max_daily_loss_pct = Decimal(str(max_daily_loss_pct))
+    return {"status": "updated", **(await risk_rules())}
+
+
+# ── Scheduler/Guardian Add APIs ──────────────────────────
+
+
+@app.post("/api/scheduler/add")
+async def scheduler_add_task(
+    name: str,
+    task_type: str = "interval",
+    run_time: str = "09:15",
+    interval: float = 60,
+):
+    """通过 Web 添加定时任务。"""
+    from datetime import time as dt_time
+
+    s = _get_scheduler()
+    if task_type == "pre_market":
+        h, m = map(int, run_time.split(":"))
+        s.add_pre_market(name, _noop_task, run_time=dt_time(h, m))
+    elif task_type == "post_market":
+        h, m = map(int, run_time.split(":"))
+        s.add_post_market(name, _noop_task, run_time=dt_time(h, m))
+    elif task_type == "interval":
+        s.add_interval(name, _noop_task, interval=interval)
+    else:
+        h, m = map(int, run_time.split(":"))
+        s.add_daily(name, _noop_task, run_time=dt_time(h, m))
+    return {"status": "added", **s.get_status()}
+
+
+async def _noop_task():
+    pass
+
+
+@app.post("/api/guardian/add")
+async def guardian_add_process(
+    name: str,
+    command: str,
+    max_restarts: int = 10,
+):
+    """通过 Web 添加被守护进程。"""
+    g = _get_guardian()
+    cmd_parts = command.split()
+    g.add_process(name=name, command=cmd_parts, max_restarts=max_restarts)
+    return {"status": "added", **g.get_status()}
+
+
+# ── Gateway Connection API ───────────────────────────────
+
+
+@app.get("/api/gateway/list")
+async def gateway_list():
+    """获取可用网关列表及连接状态。"""
+    gateways = [
+        {
+            "name": "paper",
+            "display": "模拟盘网关",
+            "status": (
+                "connected" if _paper_gateway and _paper_gateway._connected else "disconnected"
+            ),
+            "type": "paper",
+        },
+        {
+            "name": "ctp",
+            "display": "CTP 期货网关（SimNow）",
+            "status": "not_configured",
+            "type": "ctp",
+            "note": "需配置 config/gateways/ctp_simnow.yaml",
+        },
+        {
+            "name": "ibkr",
+            "display": "IB 盈透网关",
+            "status": "not_configured",
+            "type": "ib",
+            "note": "需安装 TWS/IB Gateway 并配置连接",
+        },
+    ]
+    return {"gateways": gateways}
+
+
+@app.post("/api/gateway/connect")
+async def gateway_connect(name: str = "paper"):
+    """连接指定网关。"""
+    if name == "paper":
+        gw = _get_paper_gateway()
+        if not gw._connected:
+            await gw.connect()
+        account = await gw.query_account()
+        return {"status": "connected", "gateway": name, "account": _serialize_account(account)}
+    elif name == "ctp":
+        try:
+            from quant_trading.gateway.ctp import CTPGateway
+
+            gw = CTPGateway.create_simnow("demo", "demo")
+            await gw.connect()
+            return {"status": "connected", "gateway": name, "stub": True}
+        except Exception as e:
+            return {"status": "error", "gateway": name, "error": str(e)}
+    raise HTTPException(status_code=400, detail=f"Unknown gateway: {name}")
+
+
+# ── Active Orders API ────────────────────────────────────
+
+
+@app.get("/api/live/orders")
+async def live_active_orders():
+    """获取当前活跃订单列表。"""
+    runner = _get_live_runner()
+    orders = []
+    for oid, order in runner._active_orders.items():
+        orders.append(
+            {
+                "order_id": oid[:12],
+                "symbol": str(order.instrument_id),
+                "side": order.side.value,
+                "type": order.order_type.value,
+                "quantity": str(order.quantity),
+                "price": str(order.price) if order.price else "-",
+                "status": order.status.value,
+            }
+        )
+    return {"orders": orders, "count": len(orders)}
+
+
 # ── Entrypoint ─────────────────────────────────────────────
 
 
 def main():
     """quant-web 命令的入口点。"""
+    import os
     import sys
 
     import uvicorn
+
+    # AkShare 访问东方财富等国内站点，不需要代理。
+    # 许多用户本机开启 Clash/V2Ray，会导致连接被拒。
+    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = "*"
 
     use_reload = sys.platform != "win32"
 

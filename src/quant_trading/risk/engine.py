@@ -142,6 +142,62 @@ class RiskEngine:
             )
         return orders
 
+    # ------------------------------------------------------------------
+    # 事中浮亏自动减仓
+    # ------------------------------------------------------------------
+
+    def check_unrealized_loss(
+        self,
+        positions: dict[str, Position],
+        current_prices: dict[str, Decimal],
+        threshold_pct: float = 0.08,
+        reduce_ratio: float = 0.50,
+    ) -> list[Order]:
+        """检测单标的浮亏超过阈值时自动生成减仓订单。
+
+        Args:
+            positions: 当前持仓
+            current_prices: 最新价
+            threshold_pct: 触发减仓的浮亏比例（基于持仓成本）
+            reduce_ratio: 减掉持仓的比例（0~1）
+
+        Returns:
+            需要执行的减仓市价订单列表
+        """
+        from quant_trading.model.instrument import InstrumentId
+
+        orders: list[Order] = []
+        for key, pos in positions.items():
+            if pos.is_flat or pos.avg_cost <= 0:
+                continue
+            price = current_prices.get(key)
+            if price is None:
+                continue
+
+            if pos.quantity > 0:
+                loss_pct = float((pos.avg_cost - price) / pos.avg_cost)
+            else:
+                loss_pct = float((price - pos.avg_cost) / pos.avg_cost)
+
+            if loss_pct >= threshold_pct:
+                reduce_qty = max(100, int(abs(pos.quantity) * reduce_ratio))
+                reduce_qty = (reduce_qty // 100) * 100
+                side = OrderSide.SELL if pos.quantity > 0 else OrderSide.BUY
+                orders.append(
+                    Order(
+                        instrument_id=InstrumentId.from_str(key),
+                        side=side,
+                        order_type=OrderType.MARKET,
+                        quantity=reduce_qty,
+                        strategy_id="auto_reduce",
+                    )
+                )
+                logger.warning(
+                    f"Auto-reduce: {key} loss {loss_pct:.2%} >= {threshold_pct:.2%}, "
+                    f"reduce {reduce_qty} shares"
+                )
+        return orders
+
     def get_status(self) -> dict:
         """返回当前风控状态摘要。"""
         return {

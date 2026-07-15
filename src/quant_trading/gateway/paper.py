@@ -39,6 +39,7 @@ class PaperTradingGateway(BaseGateway):
         self._positions: dict[str, Position] = {}
         self._pending_orders: list[Order] = []
         self._latest_prices: dict[str, Decimal] = {}
+        self._trailing_best: dict[str, Decimal] = {}
 
     async def connect(self) -> None:
         self._connected = True
@@ -104,9 +105,54 @@ class PaperTradingGateway(BaseGateway):
                 fill_price = self._apply_slippage(price, order.side)
                 self._execute_fill(order, fill_price)
                 to_remove.append(order)
+            elif order.order_type == OrderType.TRAILING_STOP:
+                if self._try_trailing_stop(order, price):
+                    to_remove.append(order)
+            elif order.order_type == OrderType.CONDITIONAL:
+                if self._try_conditional(order, price):
+                    to_remove.append(order)
 
         for order in to_remove:
             self._pending_orders.remove(order)
+
+    def _try_trailing_stop(self, order: Order, price: Decimal) -> bool:
+        """追踪止损：按绝对偏移量跟踪最优价并触发。"""
+        offset = order.stop_price if order.stop_price > 0 else Decimal("1")
+        oid = order.order_id
+        if order.side == OrderSide.SELL:
+            best = self._trailing_best.get(oid, price)
+            if price > best:
+                best = price
+            self._trailing_best[oid] = best
+            if price <= best - offset:
+                self._execute_fill(order, self._apply_slippage(price, order.side))
+                self._trailing_best.pop(oid, None)
+                return True
+        else:
+            best = self._trailing_best.get(oid, price)
+            if price < best:
+                best = price
+            self._trailing_best[oid] = best
+            if price >= best + offset:
+                self._execute_fill(order, self._apply_slippage(price, order.side))
+                self._trailing_best.pop(oid, None)
+                return True
+        return False
+
+    def _try_conditional(self, order: Order, price: Decimal) -> bool:
+        """条件单：表达式满足后以市价成交。"""
+        if not order.condition_expr:
+            return False
+        ns = {"close": float(price), "price": float(price)}
+        try:
+            triggered = bool(eval(order.condition_expr, {"__builtins__": {}}, ns))  # noqa: S307
+        except Exception:
+            return False
+        if triggered:
+            order.condition_met = True
+            self._execute_fill(order, self._apply_slippage(price, order.side))
+            return True
+        return False
 
     def _execute_fill(self, order: Order, price: Decimal) -> None:
         """执行成交并更新持仓和账户。"""

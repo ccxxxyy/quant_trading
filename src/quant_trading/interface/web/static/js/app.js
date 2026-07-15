@@ -13,10 +13,11 @@ const PAGE_META = {
   optimize: { title: "参数优化", desc: "网格搜索最优策略参数" },
   monitor: { title: "监控告警", desc: "系统告警与异常监控" },
   paper: { title: "模拟盘", desc: "虚拟资金实时交易模拟" },
-  risk: { title: "风控中心", desc: "紧急冻结、策略暂停、一键清仓" },
+  risk: { title: "风控中心", desc: "紧急冻结、策略暂停、一键清仓、浮亏减仓、仓位管理" },
   live: { title: "实时策略", desc: "实时策略运行、行情推送与监控" },
   ailab: { title: "AI 实验室", desc: "特征工程、模型训练与预测" },
   strategies: { title: "策略库", desc: "内置策略模板与参数说明" },
+  ops: { title: "运维中心", desc: "定时任务调度、进程守护与崩溃重启" },
   settings: { title: "系统设置", desc: "风控参数与系统配置" },
 };
 
@@ -186,7 +187,7 @@ function updateDashboard() {
 
 // ── Data Page ──────────────────────────────────────────────
 
-async function loadInstruments() {
+async function loadInstruments(focusSymbol) {
   const data = await api("/data/instruments");
   const list = document.getElementById("instrument-list");
   document.getElementById("instrument-count").textContent = data.count;
@@ -204,7 +205,10 @@ async function loadInstruments() {
     el.addEventListener("click", () => previewBars(el.dataset.symbol, el));
   });
 
-  previewBars(data.instruments[0]);
+  const target = focusSymbol && data.instruments.includes(focusSymbol)
+    ? focusSymbol
+    : data.instruments[0];
+  previewBars(target);
 }
 
 async function previewBars(symbol, activeEl) {
@@ -213,7 +217,24 @@ async function previewBars(symbol, activeEl) {
 
   try {
     const data = await api(`/data/bars/${encodeURIComponent(symbol)}?limit=200`);
-    renderPriceChart(data.bars);
+    if (!data.bars || data.bars.length === 0) {
+      destroyChart("price-chart");
+      const ctx = document.getElementById("price-chart");
+      if (ctx) {
+        const parent = ctx.parentElement;
+        const hint = parent.querySelector(".empty-hint");
+        if (!hint) {
+          const el = document.createElement("div");
+          el.className = "empty-state empty-hint";
+          el.textContent = "该标的暂无 K 线数据，请在左侧选择日期范围并点击「获取并存储」";
+          parent.appendChild(el);
+        }
+      }
+    } else {
+      const parent = document.getElementById("price-chart")?.parentElement;
+      if (parent) parent.querySelector(".empty-hint")?.remove();
+      renderPriceChart(data.bars);
+    }
   } catch {
     renderPriceChart([]);
   }
@@ -234,8 +255,13 @@ document.getElementById("fetch-form").addEventListener("submit", async (e) => {
         provider: fd.get("provider"),
       }),
     });
-    toast(`成功获取 ${result.bar_count} 条 K 线: ${result.symbol}`, "success");
-    await loadInstruments();
+    const count = result.bar_count ?? result.tick_count ?? 0;
+    if (count === 0) {
+      toast(`获取 0 条数据（${result.symbol}）——可能原因：① 代理/VPN 软件拦截了东方财富 API（请关闭 Clash/V2Ray 的 TUN 模式或添加 eastmoney.com 到直连规则）② 标的代码或日期有误 ③ 东方财富限频`, "error");
+    } else {
+      toast(`成功获取 ${count} 条 K 线: ${result.symbol}`, "success");
+    }
+    await loadInstruments(result.symbol);
     await refreshSystemInfo();
   } catch (err) {
     toast(err.message, "error");
@@ -347,6 +373,7 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
         use_demo_data: fd.get("use_demo_data") === "on",
         enable_t1: fd.get("enable_t1") === "on",
         adjust: fd.get("adjust") || "none",
+        transfer_fee_rate: (Number(fd.get("transfer_fee_rate")) || 0.2) / 10000,
       }),
     });
 
@@ -357,10 +384,14 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     updateTradesTable(result.trades);
     updateDashboard();
 
-    const mode = result.used_demo_data ? "（演示数据）" : "";
+    const mode = result.used_demo_data ? "（演示数据）" : "（真实数据）";
     toast(`回测完成${mode}: 收益率 ${fmtPct(result.metrics.total_return)}`, "success");
   } catch (err) {
-    toast(err.message, "error");
+    let msg = err.message;
+    if (msg.includes("No data") || msg.includes("Fetch data first")) {
+      msg += " —— 提示：勾选下方「无本地数据时使用模拟数据（演示模式）」可使用模拟数据回测；如需真实数据请先在数据管理页获取";
+    }
+    toast(msg, "error");
   } finally {
     showLoading(false);
   }
@@ -405,7 +436,8 @@ function renderDrawdownChart(equityCurve) {
 
 document.getElementById("run-compare-btn").addEventListener("click", async () => {
   const symbol = document.querySelector('#backtest-form [name="symbol"]').value || "600519.SSE";
-  const start = document.querySelector('#backtest-form [name="start"]').value || "2023-01-01";
+  const fallbackStart = new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10);
+  const start = document.querySelector('#backtest-form [name="start"]').value || fallbackStart;
   const end = document.querySelector('#backtest-form [name="end"]').value || null;
   const capital = Number(document.querySelector('#backtest-form [name="capital"]').value) || 1000000;
 
@@ -704,6 +736,39 @@ document.getElementById("mon-test-btn").addEventListener("click", async () => {
   }
 });
 
+// 告警推送通道切换
+document.getElementById("push-channel-select").addEventListener("change", (e) => {
+  const isEmail = e.target.value === "email";
+  document.getElementById("push-webhook-fields").style.display = isEmail ? "none" : "block";
+  document.getElementById("push-email-fields").style.display = isEmail ? "block" : "none";
+});
+
+// 告警推送配置提交
+document.getElementById("push-config-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const channel = fd.get("channel");
+  const params = new URLSearchParams();
+  params.set("channel", channel);
+  if (channel === "webhook") {
+    params.set("url", fd.get("url"));
+    params.set("platform", fd.get("platform"));
+  } else {
+    params.set("smtp_host", fd.get("smtp_host"));
+    params.set("smtp_port", fd.get("smtp_port"));
+    params.set("username", fd.get("username"));
+    params.set("password", fd.get("password"));
+    params.set("sender", fd.get("sender"));
+    params.set("recipients", fd.get("recipients"));
+  }
+  showLoading(true);
+  try {
+    const r = await api(`/monitor/push-config?${params.toString()}`, { method: "POST" });
+    toast(`推送通道已配置并测试成功（${r.channel}）`, "success");
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
 // ── Paper Trading ───────────────────────────────────────────
 
 function updatePaperAccount(account) {
@@ -788,15 +853,24 @@ document.getElementById("paper-order-form").addEventListener("submit", async (e)
   const fd = new FormData(e.target);
   showLoading(true);
   try {
+    const payload = {
+      symbol: fd.get("symbol"),
+      side: fd.get("side"),
+      order_type: fd.get("order_type"),
+      quantity: Number(fd.get("quantity")),
+      price: fd.get("price") ? Number(fd.get("price")) : null,
+    };
+    if (fd.get("order_type") === "trailing_stop") {
+      payload.trail_offset = fd.get("trail_offset") ? Number(fd.get("trail_offset")) : null;
+      payload.trigger_price = fd.get("trigger_price") ? Number(fd.get("trigger_price")) : null;
+    }
+    if (fd.get("order_type") === "conditional") {
+      payload.cond_price = fd.get("cond_price") ? Number(fd.get("cond_price")) : null;
+      payload.cond_direction = fd.get("cond_direction") || "above";
+    }
     const result = await api("/paper/order", {
       method: "POST",
-      body: JSON.stringify({
-        symbol: fd.get("symbol"),
-        side: fd.get("side"),
-        order_type: fd.get("order_type"),
-        quantity: Number(fd.get("quantity")),
-        price: fd.get("price") ? Number(fd.get("price")) : null,
-      }),
+      body: JSON.stringify(payload),
     });
     updatePaperAccount(result.account);
     updatePaperPositions(result.positions);
@@ -992,6 +1066,58 @@ document.getElementById("risk-refresh-btn").addEventListener("click", async () =
   toast("风控状态已刷新", "success");
 });
 
+// ── Auto Reduce & Position Sizer ─────────────────────────────
+
+document.getElementById("auto-reduce-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const threshold = Number(fd.get("threshold")) / 100;
+  const reduceRatio = Number(fd.get("reduce_ratio")) / 100;
+  showLoading(true);
+  try {
+    const data = await api(`/risk/auto-reduce?threshold=${threshold}&reduce_ratio=${reduceRatio}`);
+    const el = document.getElementById("auto-reduce-result");
+    if (!data.orders?.length) {
+      el.innerHTML = '<div class="empty-state">当前无需减仓（所有持仓浮亏在阈值内）</div>';
+      toast("检测完成，无需减仓", "success");
+    } else {
+      el.innerHTML = `
+        <div style="padding:0.75rem">
+          <p style="color:var(--amber);font-weight:600;margin-bottom:0.5rem">发现 ${data.orders.length} 笔需减仓</p>
+          ${data.orders.map((o) => `<p>${o.instrument_id}: ${o.side} ${o.quantity} 股</p>`).join("")}
+        </div>`;
+      toast(`浮亏减仓建议: ${data.orders.length} 笔`, "warning");
+    }
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("position-sizer-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const mode = fd.get("mode");
+  const symbols = fd.get("symbols");
+  showLoading(true);
+  try {
+    const data = await api(`/position-sizer/calculate?mode=${encodeURIComponent(mode)}&symbols=${encodeURIComponent(symbols)}`, {
+      method: "POST",
+    });
+    const tbody = document.querySelector("#position-sizer-table tbody");
+    if (!data.results?.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">无数据</td></tr>';
+    } else {
+      tbody.innerHTML = data.results.map((r) => `<tr>
+        <td>${r.instrument}</td>
+        <td>${fmtPct(r.weight, 1)}</td>
+        <td>${fmtNum(r.target_value, 0)}</td>
+        <td>${fmtNum(r.target_quantity, 0)}</td>
+      </tr>`).join("");
+    }
+    toast(`仓位计算完成 (${mode}): ${data.results.length} 个标的`, "success");
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
 // ── Live Strategy Runner ────────────────────────────────────
 
 let liveFeedLog = [];
@@ -1017,9 +1143,11 @@ async function loadLiveStatus() {
       runEl.textContent = "停止";
       runEl.className = "kpi-value";
     }
-    document.getElementById("live-strategy-id").textContent = status.strategy_id || "-";
-    document.getElementById("live-symbol").textContent = status.symbol || "-";
-    document.getElementById("live-bars-count").textContent = status.bars_received ?? 0;
+    const strats = status.strategies || [];
+    document.getElementById("live-strategy-id").textContent = strats.length ? strats.map(s => s.id).join(", ") : "-";
+    const syms = strats.flatMap(s => s.instruments || []);
+    document.getElementById("live-symbol").textContent = syms.length ? syms.join(", ") : "-";
+    document.getElementById("live-bars-count").textContent = status.bar_count ?? 0;
   } catch {
     /* live runner may not exist yet */
   }
@@ -1084,7 +1212,386 @@ document.getElementById("live-feed-form").addEventListener("submit", async (e) =
 
 document.getElementById("live-refresh-btn").addEventListener("click", async () => {
   await loadLiveStatus();
+  await loadWsStatus();
   toast("状态已刷新", "success");
+});
+
+// ── WebSocket Feed Controls ─────────────────────────────────
+
+async function loadWsStatus() {
+  try {
+    const data = await api("/live/ws-status");
+    const stateEl = document.getElementById("ws-state");
+    const state = data.feed_state || "disconnected";
+    stateEl.textContent = state === "connected" ? "已连接" : state === "reconnecting" ? "重连中" : "未连接";
+    stateEl.className = "kpi-value" + (state === "connected" ? " positive" : state === "reconnecting" ? " negative" : "");
+    document.getElementById("ws-reconnects").textContent = data.websocket?.reconnect_count ?? 0;
+  } catch { /* silent */ }
+}
+
+document.getElementById("ws-connect-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const url = fd.get("ws_url");
+  const symbols = fd.get("ws_symbols") || "";
+  showLoading(true);
+  try {
+    await api(`/live/ws-connect?url=${encodeURIComponent(url)}&symbols=${encodeURIComponent(symbols)}`, {
+      method: "POST",
+    });
+    toast("WebSocket 行情源已连接（含自动重连）", "success");
+    await loadWsStatus();
+    await loadLiveStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("ws-disconnect-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/live/ws-disconnect", { method: "POST" });
+    toast("WebSocket 行情源已断开", "info");
+    await loadWsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+// ── Ops Center (Scheduler + Guardian) ────────────────────────
+
+async function loadOpsStatus() {
+  try {
+    const [sched, guard] = await Promise.all([
+      api("/scheduler/status"),
+      api("/guardian/status"),
+    ]);
+
+    const sr = document.getElementById("ops-scheduler-running");
+    sr.textContent = sched.running ? "运行中" : "停止";
+    sr.className = "kpi-value" + (sched.running ? " positive" : "");
+    document.getElementById("ops-task-count").textContent = sched.task_count ?? 0;
+
+    const gr = document.getElementById("ops-guardian-running");
+    gr.textContent = guard.running ? "运行中" : "停止";
+    gr.className = "kpi-value" + (guard.running ? " positive" : "");
+    document.getElementById("ops-process-count").textContent = guard.process_count ?? 0;
+
+    // task table
+    const taskTb = document.querySelector("#ops-task-table tbody");
+    const tasks = sched.tasks || [];
+    taskTb.innerHTML = tasks.length === 0
+      ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">暂无定时任务</td></tr>'
+      : tasks.map(t => `<tr>
+          <td>${t.name}</td>
+          <td><span class="badge">${t.type}</span></td>
+          <td>${t.run_time || (t.interval ? t.interval + "s 间隔" : "-")}</td>
+          <td>${t.run_count}</td>
+          <td>${t.error_count > 0 ? '<span class="negative">' + t.error_count + "</span>" : "0"}</td>
+          <td>${t.enabled ? "✅ 启用" : "⏸ 禁用"}</td>
+          <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:0.75rem" onclick="runTaskNow('${t.name}')">立即执行</button></td>
+        </tr>`).join("");
+
+    // process table
+    const procTb = document.querySelector("#ops-process-table tbody");
+    const procs = guard.processes || [];
+    const stateMap = { stopped: "已停止", running: "运行中", crashed: "已崩溃", restarting: "重启中", max_restarts_reached: "已放弃" };
+    procTb.innerHTML = procs.length === 0
+      ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">暂无被守护进程</td></tr>'
+      : procs.map(p => `<tr>
+          <td>${p.name}</td>
+          <td><span class="${p.state === "running" ? "positive" : p.state === "crashed" ? "negative" : ""}">${stateMap[p.state] || p.state}</span></td>
+          <td>${p.pid || "-"}</td>
+          <td>${p.uptime_seconds > 0 ? fmtNum(p.uptime_seconds, 0) + "s" : "-"}</td>
+          <td>${p.restart_count} / ${p.max_restarts}</td>
+          <td>${p.last_crash || "-"}</td>
+          <td><button class="btn btn-ghost" style="padding:2px 8px;font-size:0.75rem" onclick="restartProcess('${p.name}')">重启</button></td>
+        </tr>`).join("");
+  } catch { /* page not active yet */ }
+}
+
+async function runTaskNow(name) {
+  showLoading(true);
+  try {
+    const r = await api(`/scheduler/run?task_name=${encodeURIComponent(name)}`, { method: "POST" });
+    toast(`任务 "${name}" 执行${r.status === "success" ? "成功" : "失败"}`, r.status === "success" ? "success" : "error");
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+}
+
+async function restartProcess(name) {
+  showLoading(true);
+  try {
+    await api(`/guardian/restart?name=${encodeURIComponent(name)}`, { method: "POST" });
+    toast(`进程 "${name}" 正在重启`, "success");
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+}
+
+document.getElementById("ops-scheduler-start-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/scheduler/start", { method: "POST" });
+    toast("定时任务调度器已启动", "success");
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("ops-scheduler-stop-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/scheduler/stop", { method: "POST" });
+    toast("定时任务调度器已停止", "info");
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("ops-guardian-start-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/guardian/start", { method: "POST" });
+    toast("进程守护器已启动", "success");
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("ops-guardian-stop-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await api("/guardian/stop", { method: "POST" });
+    toast("进程守护器已停止（所有子进程已终止）", "info");
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("ops-refresh-btn").addEventListener("click", async () => {
+  await loadOpsStatus();
+  toast("运维状态已刷新", "success");
+});
+
+// ── Walk-Forward ───────────────────────────────────────────
+
+document.getElementById("walkforward-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const bt = document.getElementById("backtest-form");
+  const btFd = new FormData(bt);
+  const params = new URLSearchParams();
+  params.set("strategy", btFd.get("strategy"));
+  params.set("symbol", btFd.get("symbol"));
+  params.set("start", btFd.get("start") || new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10));
+  params.set("end", btFd.get("end") || new Date().toISOString().slice(0, 10));
+  params.set("capital", btFd.get("capital") || "1000000");
+  params.set("train_days", fd.get("in_sample_days"));
+  params.set("test_days", fd.get("out_sample_days"));
+  params.set("use_demo_data", btFd.get("use_demo_data") === "on" ? "true" : "false");
+  showLoading(true);
+  try {
+    const data = await api(`/walkforward/run?${params.toString()}`, { method: "POST" });
+    const resEl = document.getElementById("walkforward-result");
+    resEl.innerHTML = `<div style="padding:0.75rem">
+      <p>窗口数: <strong>${data.num_windows}</strong> | 平均测试 Sharpe: <strong>${fmtNum(data.avg_test_sharpe, 3)}</strong> | 一致性: <strong>${fmtPct(data.consistency_ratio)}</strong></p>
+      <p style="font-size:0.8rem;color:var(--text-muted)">一致性比率 = 盈利窗口数 / 总窗口数，> 50% 表示较稳健</p>
+    </div>`;
+
+    const tbody = document.querySelector("#walkforward-table tbody");
+    tbody.innerHTML = (data.windows || []).map((w, i) => {
+      const cls = w.return >= 0 ? "positive" : "negative";
+      return `<tr>
+        <td>${w.id || i + 1}</td>
+        <td>-</td>
+        <td>${fmtNum(w.sharpe, 3)}</td>
+        <td class="${cls}">${fmtPct(w.return)}</td>
+        <td>-</td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="5" class="empty-state">无数据</td></tr>';
+    toast(`Walk-Forward 完成: ${data.num_windows} 窗口`, "success");
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+// ── TWAP / VWAP 执行算法预览 ────────────────────────────────
+
+document.getElementById("algo-preview-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const params = new URLSearchParams();
+  params.set("algorithm", fd.get("algorithm"));
+  params.set("symbol", fd.get("symbol"));
+  params.set("side", fd.get("side"));
+  params.set("total_quantity", fd.get("total_quantity"));
+  params.set("num_slices", fd.get("num_slices"));
+  params.set("interval_seconds", fd.get("interval_seconds"));
+  showLoading(true);
+  try {
+    const data = await api(`/algo/preview?${params.toString()}`, { method: "POST" });
+    const tbody = document.querySelector("#algo-slices-table tbody");
+    tbody.innerHTML = (data.slices || []).map((s) => {
+      const extra = s.time_offset != null ? s.time_offset + "s" : (s.volume_pct != null ? fmtPct(s.volume_pct) : "-");
+      return `<tr>
+        <td>${s.index + 1}</td>
+        <td>${fmtNum(s.quantity, 0)}</td>
+        <td>${extra}</td>
+      </tr>`;
+    }).join("");
+    toast(`${data.algorithm.toUpperCase()} 拆单: ${data.num_slices} 切片`, "success");
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+// ── 追踪止损 / 条件单字段切换 ──────────────────────────────
+
+document.querySelector('#paper-order-form [name="order_type"]').addEventListener("change", (e) => {
+  const v = e.target.value;
+  document.getElementById("trailing-stop-fields").style.display = v === "trailing_stop" ? "block" : "none";
+  document.getElementById("conditional-fields").style.display = v === "conditional" ? "block" : "none";
+});
+
+// ── 活跃订单（实时策略页）──────────────────────────────────
+
+async function loadActiveOrders() {
+  try {
+    const data = await api("/live/orders");
+    const tbody = document.querySelector("#live-orders-table tbody");
+    const emptyEl = document.getElementById("live-orders-empty");
+    if (!data.orders?.length) {
+      tbody.innerHTML = "";
+      emptyEl.style.display = "block";
+    } else {
+      emptyEl.style.display = "none";
+      tbody.innerHTML = data.orders.map((o) => `<tr>
+        <td style="font-size:0.75rem;font-family:var(--mono)">${o.order_id}</td>
+        <td>${o.symbol}</td>
+        <td>${o.side}</td>
+        <td>${o.type}</td>
+        <td>${o.quantity}</td>
+        <td>${o.price}</td>
+        <td>${o.status}</td>
+      </tr>`).join("");
+    }
+  } catch { /* silent */ }
+}
+
+document.getElementById("live-orders-refresh-btn").addEventListener("click", async () => {
+  await loadActiveOrders();
+  toast("订单状态已刷新", "success");
+});
+
+// ── 券商网关 ──────────────────────────────────────────────
+
+async function loadGateways() {
+  try {
+    const data = await api("/gateway/list");
+    const tbody = document.querySelector("#gateway-table tbody");
+    tbody.innerHTML = (data.gateways || []).map((gw) => {
+      const statusCls = gw.status === "connected" ? "positive" : gw.status === "not_configured" ? "" : "negative";
+      const statusText = gw.status === "connected" ? "已连接" : gw.status === "not_configured" ? "未配置" : "未连接";
+      const canConnect = gw.type === "paper" || gw.status !== "not_configured";
+      return `<tr>
+        <td>${gw.display}</td>
+        <td><span class="badge">${gw.type}</span></td>
+        <td class="${statusCls}">${statusText}</td>
+        <td style="font-size:0.75rem;color:var(--text-muted)">${gw.note || "-"}</td>
+        <td>${canConnect ? `<button class="btn btn-ghost" style="padding:2px 8px;font-size:0.75rem" onclick="connectGateway('${gw.name}')">连接</button>` : "-"}</td>
+      </tr>`;
+    }).join("");
+  } catch { /* silent */ }
+}
+
+async function connectGateway(name) {
+  showLoading(true);
+  try {
+    const r = await api(`/gateway/connect?name=${encodeURIComponent(name)}`, { method: "POST" });
+    toast(`网关 ${name} ${r.status === "connected" ? "连接成功" : "连接失败: " + (r.error || "")}`, r.status === "connected" ? "success" : "error");
+    await loadGateways();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+}
+
+document.getElementById("gateway-refresh-btn").addEventListener("click", async () => {
+  await loadGateways();
+  toast("网关状态已刷新", "success");
+});
+
+// ── 事前四重风控规则 ─────────────────────────────────────
+
+async function loadRiskRules() {
+  try {
+    const data = await api("/risk/rules");
+    const tbody = document.querySelector("#risk-rules-table tbody");
+    tbody.innerHTML = (data.rules || []).map((r) => {
+      const displayVal = typeof r.value === "number" && r.value < 1 && r.value > 0 ? fmtPct(r.value) : r.value;
+      return `<tr>
+        <td><strong>${r.name}</strong></td>
+        <td>${displayVal}</td>
+        <td style="font-size:0.8rem;color:var(--text-muted)">${r.desc}</td>
+        <td>
+          <input type="number" step="any" value="${r.value}" style="width:80px;padding:3px 6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.8rem"
+                 onchange="updateRiskRule('${r.key}', this.value)" />
+        </td>
+      </tr>`;
+    }).join("");
+    const statusEl = document.getElementById("risk-rules-status");
+    statusEl.innerHTML = `冻结: ${data.frozen ? '<span class="negative">是</span>' : '否'} | 策略暂停: ${data.strategies_halted ? '<span class="negative">是</span>' : '否'}`;
+  } catch { /* silent */ }
+}
+
+async function updateRiskRule(key, value) {
+  showLoading(true);
+  try {
+    const params = new URLSearchParams();
+    params.set(key, value);
+    await api(`/risk/rules/update?${params.toString()}`, { method: "POST" });
+    toast(`风控规则 ${key} 已更新为 ${value}`, "success");
+    await loadRiskRules();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+}
+
+document.getElementById("risk-rules-refresh-btn").addEventListener("click", async () => {
+  await loadRiskRules();
+  toast("风控规则已刷新", "success");
+});
+
+// ── 添加定时任务 / 添加被守护进程 ──────────────────────────
+
+document.getElementById("add-task-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const params = new URLSearchParams();
+  params.set("name", fd.get("name"));
+  params.set("task_type", fd.get("task_type"));
+  params.set("run_time", fd.get("run_time"));
+  params.set("interval", fd.get("interval"));
+  showLoading(true);
+  try {
+    await api(`/scheduler/add?${params.toString()}`, { method: "POST" });
+    toast(`定时任务 "${fd.get("name")}" 已添加`, "success");
+    e.target.reset();
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("add-process-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const params = new URLSearchParams();
+  params.set("name", fd.get("name"));
+  params.set("command", fd.get("command"));
+  params.set("max_restarts", fd.get("max_restarts"));
+  showLoading(true);
+  try {
+    await api(`/guardian/add?${params.toString()}`, { method: "POST" });
+    toast(`被守护进程 "${fd.get("name")}" 已添加`, "success");
+    e.target.reset();
+    await loadOpsStatus();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
 });
 
 // ── Init ───────────────────────────────────────────────────
@@ -1104,7 +1611,22 @@ async function refreshSystemInfo() {
   populateLiveStrategySelect();
 }
 
+function setDefaultDates() {
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const oneYearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+  const oneYearAgoStr = oneYearAgo.toISOString().slice(0, 10);
+
+  document.querySelectorAll('#backtest-form [name="start"]').forEach(el => { el.value = oneYearAgoStr; });
+  document.querySelectorAll('#backtest-form [name="end"]').forEach(el => { el.value = todayStr; });
+  document.querySelectorAll('#fetch-form [name="start"]').forEach(el => { if (!el.value) el.value = oneYearAgoStr; });
+  document.querySelectorAll('#fetch-form [name="end"]').forEach(el => { if (!el.value) el.value = todayStr; });
+  document.querySelectorAll('#optimize-form [name="start"]').forEach(el => { el.value = oneYearAgoStr; });
+  document.querySelectorAll('#optimize-form [name="end"]').forEach(el => { el.value = todayStr; });
+}
+
 async function init() {
+  setDefaultDates();
   showLoading(true);
   try {
     await api("/health");
@@ -1115,9 +1637,13 @@ async function init() {
       loadMonitorConfig(),
       refreshPaperState(),
       loadRiskStatus(),
+      loadRiskRules(),
       loadLiveStatus(),
+      loadActiveOrders(),
       loadAIFeatures(),
       loadAIModels(),
+      loadOpsStatus(),
+      loadGateways(),
     ]);
     document.getElementById("system-status").textContent = "系统就绪";
   } catch (err) {
@@ -1138,9 +1664,13 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
       loadMonitorConfig(),
       refreshPaperState(),
       loadRiskStatus(),
+      loadRiskRules(),
       loadLiveStatus(),
+      loadActiveOrders(),
       loadAIFeatures(),
       loadAIModels(),
+      loadOpsStatus(),
+      loadGateways(),
     ]);
     toast("已刷新", "success");
   } catch (err) {

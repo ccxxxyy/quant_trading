@@ -141,6 +141,9 @@
 | B-19 | 海龟策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_turtle_strategy_backtest` | 通过 |
 | B-20 | 布林带策略端到端 | `uv run pytest tests/integration/test_backtest_flow.py::TestBacktestIntegration::test_bollinger_strategy_backtest` | 通过 |
 | B-21 | A股增强回测 API | `POST /api/backtest/run` body 含 `"enable_t1":true,"adjust":"forward"` | 正常返回 metrics，无报错 |
+| B-22 | 过户费计算 | 卖出+买入时 commission 均含 transfer_fee（默认万分之0.2） | 双向收取过户费 |
+| B-23 | 追踪止损单 | 提交 TRAILING_STOP 订单，推入多根K线后回落触发 | 止损价跟随最高价浮动，回落达阈值后成交 |
+| B-24 | 条件单 | 提交 CONDITIONAL 订单（condition_expr="close > 105"），推入 close=110 的K线 | 条件满足后自动市价成交 |
 
 ---
 
@@ -180,6 +183,10 @@
 | R-08 | 策略暂停 | `uv run python -c "from quant_trading.risk.engine import RiskEngine; from quant_trading.model.account import Account; from decimal import Decimal; e=RiskEngine(Account('d',Decimal('100000'),Decimal('100000'))); e.halt_strategies(); print(e.get_status()['strategies_halted'])"` | strategies_halted=True |
 | R-09 | 一键清仓信号 | `uv run python -c "from quant_trading.risk.engine import RiskEngine; from quant_trading.model.account import Account; from quant_trading.model.instrument import InstrumentId, Exchange; from decimal import Decimal; e=RiskEngine(Account('d',Decimal('100000'),Decimal('100000'))); pos={InstrumentId('600519',Exchange.SSE): type('P',(),{'quantity':100})()}; orders=e.close_all_positions(pos); print(len(orders), orders[0].side.value if orders else 'none')"` | 返回 sell 平仓订单列表 |
 
+| R-10a | 浮亏自动减仓 | 调用 `check_unrealized_loss()`，传入浮亏超阈值的持仓 | 返回减仓市价订单列表 |
+| R-10b | 仓位管理-等权 | `PositionSizer(EQUAL_WEIGHT).calculate(...)` 传入 3 个标的 | 三者权重均为 1/3，数量按100股对齐 |
+| R-10c | 仓位管理-凯利 | `PositionSizer(KELLY).calculate(...)` 传入胜率和盈亏比 | 权重 = Kelly fraction，不超过 cap |
+
 #### 6.2 投资组合管理
 | 编号 | 测试项 | 验证方法 | 预期结果 |
 |------|--------|---------|---------|
@@ -206,6 +213,10 @@
 |------|--------|---------|---------|
 | R-19 | 运行器启停 | `uv run python -c "from quant_trading.strategy.runner import LiveStrategyRunner; r=LiveStrategyRunner(); print(r.is_running)"` | 初始 is_running=False |
 | R-20 | Web 启停 API | `POST /api/live/start` → `GET /api/live/status` → `POST /api/live/stop` | running 状态随操作切换 |
+| R-21 | WebSocket 行情源初始化 | `uv run python -c "from quant_trading.data.websocket_feed import WebSocketFeed, ConnectionState; f=WebSocketFeed(); assert f.state==ConnectionState.DISCONNECTED; print('OK')"` | 初始状态为 disconnected |
+| R-22 | Runner WS 集成 | `uv run python -c "from quant_trading.strategy.runner import LiveStrategyRunner; r=LiveStrategyRunner(); s=r.get_status(); assert 'feed_state' in s; print('OK')"` | get_status 包含 feed_state 和 websocket 字段 |
+| R-23 | 订单回调链路 | 注册 order callback → 发送 on_order_update(FILLED) | 回调被触发，completed 后自动清理 |
+| R-24 | 行情缺失检测 | 设置 gap_timeout=5 → 订阅标的 → 超时不推送 | on_gap_detected 回调触发 |
 
 ---
 
@@ -402,7 +413,84 @@
 | W-75 | 因子列表 | 进入 AI 实验室 | 表格展示 7 个因子（momentum、volatility、rsi、volume_ratio） |
 | W-76 | 模型卡片 | 进入 AI 实验室 | 显示 LightGBM 模型卡片及"available"状态 |
 | W-77 | 特征计算 | 输入标的 → 点击"计算特征" | 表格展示最近 20 行数据，包含所有因子列 |
-| W-78 | 导航栏完整 | 查看侧栏 | 11 个导航按钮（总览/数据/回测/参数优化/监控告警/模拟盘/风控中心/实时策略/AI实验室/策略库/设置） |
+| W-78 | 导航栏完整 | 查看侧栏 | 12 个导航按钮（总览/数据/回测/参数优化/监控告警/模拟盘/风控中心/实时策略/AI实验室/策略库/运维中心/设置） |
+| W-79 | 回测过户费率 | 回测表单内修改"过户费率"字段 → 运行回测 | 手续费中包含过户费 |
+| W-80 | 浮亏减仓表单 | 风控中心 → 设置阈值和减仓比例 → 点击"检测浮亏" | 返回减仓建议或"无需减仓" |
+| W-81 | 仓位管理器 | 风控中心 → 选择模式 + 输入标的 → 点击"计算目标仓位" | 表格显示各标的权重/金额/股数 |
+| W-82 | 仓位管理模式切换 | 依次选择等权/风险平价/凯利/固定金额 | 计算结果随模式变化 |
+| W-83 | WebSocket 行情源面板 | 实时策略页 → 查看 WebSocket 行情源区域 | 显示 URL 输入、标的输入、连接/断开按钮、连接状态和重连次数 |
+| W-84 | 连接 WebSocket | 启动策略后 → 输入 URL → 点击"连接行情源" | 提示"已连接"，状态显示"已连接" |
+| W-85 | 断开 WebSocket | 点击"断开行情源" | 提示"已断开"，状态回到"未连接" |
+| W-86 | WebSocket API: ws-connect | `POST /api/live/ws-connect?url=ws://...&symbols=X.SSE` | 返回 ws_connected + 完整 status |
+| W-87 | WebSocket API: ws-disconnect | `POST /api/live/ws-disconnect` | 返回 ws_disconnected |
+| W-88 | WebSocket API: ws-status | `GET /api/live/ws-status` | 返回 feed_state、websocket、active_orders |
+
+#### 10.19 Web UI 页面（P1 补齐项）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-89 | Walk-Forward 面板 | 回测实验室 → 设置训练/测试窗口 → 运行 Walk-Forward | 显示窗口数、平均 Sharpe、一致性比率及窗口明细表 |
+| W-90 | Walk-Forward API | `POST /api/walkforward/run?strategy=dual_ma&symbol=TEST.SSE&train_days=180&test_days=30&use_demo_data=true` | 返回 num_windows、avg_test_sharpe、windows 数组 |
+| W-91 | TWAP 拆单预览 | 模拟盘 → TWAP/VWAP 面板 → 预览拆单 | 表格显示各切片数量与时间偏移 |
+| W-92 | VWAP 拆单预览 | 同上，算法选 VWAP | 表格显示各切片数量与成交量权重 |
+| W-93 | 追踪止损下单 | 模拟盘 → 类型选「追踪止损」→ 填写追踪距离 → 提交 | 订单进入挂单列表，status=submitted |
+| W-94 | 条件单下单 | 模拟盘 → 类型选「条件单」→ 填写触发价 → 提交 | 订单进入挂单列表，等待价格触发 |
+| W-95 | 活跃订单监控 | 实时策略 → 活跃订单面板 → 刷新 | 显示 order_id、标的、方向、类型、状态 |
+| W-96 | 活跃订单 API | `GET /api/live/orders` | 返回 orders 数组和 count |
+| W-97 | 事前风控规则展示 | 风控中心 → 事前四重风控规则表格 | 显示 4 条规则当前阈值 |
+| W-98 | 事前风控规则修改 | 表格内修改阈值 → 自动提交 | toast 提示已更新，刷新后值生效 |
+| W-99 | 风控规则 API | `GET /api/risk/rules` + `POST /api/risk/rules/update?max_position_pct=0.2` | 返回/更新 4 条规则 |
+| W-100 | 添加定时任务 | 运维中心 → 添加定时任务表单 → 提交 | 任务列表新增一条，task_count+1 |
+| W-101 | 添加被守护进程 | 运维中心 → 添加被守护进程表单 → 提交 | 进程列表新增一条，process_count+1 |
+| W-102 | 券商网关列表 | 模拟盘 → 券商网关连接面板 | 显示 paper/ctp/ib 网关及状态 |
+| W-103 | 连接模拟盘网关 | 点击 paper 网关「连接」按钮 | 状态变为已连接 |
+| W-104 | 网关 API | `GET /api/gateway/list` + `POST /api/gateway/connect?name=paper` | 返回 gateways 列表及连接结果 |
+| W-105 | 告警推送 Web 配置 | 监控告警 → 告警推送配置 → 保存并测试 | toast 提示配置成功 |
+
+#### 10.17 数据中心扩展
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| D-10 | 指数代码识别 | `AkShareFeed._is_index("000001")` | 返回 True（上证指数） |
+| D-11 | 可转债代码识别 | `AkShareFeed._is_convertible_bond("113050")` | 返回 True（南银转债） |
+| D-12 | Tick 数据存储 | `DataStore.save_ticks()` → `load_ticks()` | 写入/读取 Tick Parquet 文件一致 |
+| D-13 | Tick 数据回放 | `DataEngine.replay_ticks()` | 逐条发送 Tick 事件到事件总线 |
+| D-14 | 数据源 Tick 接口 | `AkShareFeed.get_ticks()` | 返回 Tick 列表（实时快照） |
+
+#### 10.18 运维支撑
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| O-01 | 调度器初始化 | `TaskScheduler()` + `get_status()` | running=False, task_count=0 |
+| O-02 | 添加盘前任务 | `add_pre_market("test", handler, time(9,15))` | task_count=1, type=pre_market |
+| O-03 | 添加盘后任务 | `add_post_market("test", handler, time(15,30))` | task_count 增加 |
+| O-04 | 间隔任务 | `add_interval("check", handler, interval=60)` | interval_seconds=60 |
+| O-05 | 手动执行任务 | `run_task_now("test")` | 返回 status=success, run_count=1 |
+| O-06 | 进程守护器初始化 | `ProcessGuardian()` + `get_status()` | running=False, process_count=0 |
+| O-07 | 注册被守护进程 | `add_process("web", ["echo","hi"])` | process_count=1, state=stopped |
+| O-08 | 调度器 API | `GET /api/scheduler/status` | 返回 running、task_count、tasks 列表 |
+| O-09 | 守护器 API | `GET /api/guardian/status` | 返回 running、process_count、processes 列表 |
+
+#### 10.19 Web UI 页面（P1 补齐项）
+| 编号 | 测试项 | 验证方法 | 预期结果 |
+|------|--------|---------|---------|
+| W-89 | Walk-Forward 面板 | 回测实验室 → 设置训练/测试窗口 → 运行 Walk-Forward | 显示窗口数、平均 Sharpe、一致性比率及窗口明细表 |
+| W-90 | Walk-Forward API | `POST /api/walkforward/run?strategy=dual_ma&symbol=TEST.SSE&train_days=180&test_days=30&use_demo_data=true` | 返回 num_windows、windows 数组 |
+| W-91 | TWAP 拆单预览 | 模拟盘 → TWAP/VWAP 面板 → 预览拆单 | 表格显示各切片数量与时间偏移 |
+| W-92 | VWAP 拆单预览 | 同上，算法选 VWAP | 表格显示各切片数量与成交量权重 |
+| W-93 | 执行算法 API | `POST /api/algo/preview?algorithm=twap&total_quantity=10000&num_slices=5` | 返回 slices 数组 |
+| W-94 | 追踪止损下单 | 模拟盘 → 类型选「追踪止损」→ 填写追踪距离 → 提交 | 订单进入挂单列表，status=submitted |
+| W-95 | 条件单下单 | 模拟盘 → 类型选「条件单」→ 填写触发价 → 提交 | 订单进入挂单列表，等待价格触发 |
+| W-96 | 活跃订单面板 | 实时策略页 → 查看「活跃订单」表格 → 刷新 | 显示 order_id、标的、方向、类型、状态 |
+| W-97 | 活跃订单 API | `GET /api/live/orders` | 返回 orders 数组和 count |
+| W-98 | 事前风控规则 | 风控中心 → 查看「事前四重风控规则」表格 | 显示 4 条规则当前值，可在线修改 |
+| W-99 | 风控规则 API | `GET /api/risk/rules` + `POST /api/risk/rules/update?max_position_pct=0.2` | 返回 4 条规则，修改后实时生效 |
+| W-100 | 添加定时任务 | 运维中心 → 填写任务名/类型/时间 → 添加 | 任务列表新增一条，task_count+1 |
+| W-101 | 添加被守护进程 | 运维中心 → 填写进程名/命令 → 添加 | 进程列表新增一条，process_count+1 |
+| W-102 | 调度器添加 API | `POST /api/scheduler/add?name=测试任务&task_type=interval&interval=60` | status=added |
+| W-103 | 守护器添加 API | `POST /api/guardian/add?name=测试进程&command=echo hi` | status=added |
+| W-104 | 券商网关面板 | 模拟盘 → 查看「券商网关连接」表格 | 显示 paper/ctp/ibkr 状态及连接按钮 |
+| W-105 | 网关连接 | 点击模拟盘网关「连接」 | status=connected，toast 提示成功 |
+| W-106 | 网关 API | `GET /api/gateway/list` + `POST /api/gateway/connect?name=paper` | 返回 gateways 列表，连接后 status=connected |
+| W-107 | 告警推送 Web 配置 | 监控告警 → 选择 Webhook/Email → 保存并测试 | toast 提示配置成功 |
+| W-108 | Tick Web 拉取 | 数据管理 → 周期选「Tick 逐笔」→ 获取 | 成功返回 tick 数据并存储 |
 
 ---
 
@@ -601,7 +689,7 @@ uv run quant-web
 | 10 | AI 因子 | AI 实验室 | 查看因子列表/模型 → 计算特征 |
 | 11 | 策略库 | 策略库 | 卡片式展示 → 一键跳转回测 |
 
-**展示效果**：11 个页面覆盖系统所有功能，无需任何命令行操作。
+**展示效果**：12 个页面覆盖系统所有功能，无需任何命令行操作。
 
 ---
 
@@ -685,6 +773,58 @@ print(f"超大订单: {result}")  # approved=False, reason=单笔金额超限
 7. 点击 **「停止运行」** → 状态恢复为"停止"
 
 **展示效果**：策略在后台持续运行，推送 K 线后自动处理信号，全过程在页面完成。
+
+---
+
+### 展示十三B：WebSocket 实时行情接入
+
+**操作步骤：**
+
+1. 先按展示十三启动策略运行器
+2. 在启动面板下方找到 **「WebSocket 行情源」** 区域
+3. URL 栏保持默认 `ws://127.0.0.1:9999/ws/market`（或填入实际行情源地址）
+4. 标的列表栏留空（自动使用策略绑定标的）或填入 `600519.SSE`
+5. 点击 **「连接行情源」** → 提示"WebSocket 行情源已连接（含自动重连）"
+6. 观察连接状态变为 **"已连接"**（绿色），重连次数为 0
+7. 如断线会自动重连，重连次数递增
+8. 点击 **「断开行情源」** → 状态回到"未连接"
+
+**展示效果**：一键接入外部 WebSocket 行情源，自动维护连接（含指数退避重连、行情缺失检测），无需编写连接代码。
+
+---
+
+### 展示十三C：订单状态回调链路
+
+```python
+# uv run python
+from quant_trading.strategy.runner import LiveStrategyRunner
+from quant_trading.model.order import Order, OrderType, OrderSide, OrderStatus
+from quant_trading.model.instrument import InstrumentId
+from decimal import Decimal
+
+runner = LiveStrategyRunner()
+order = Order(
+    instrument_id=InstrumentId.from_str("DEMO.SSE"),
+    order_type=OrderType.LIMIT,
+    side=OrderSide.BUY,
+    quantity=Decimal("100"),
+    price=Decimal("10.0"),
+)
+
+# 注册回调
+runner._active_orders[order.order_id] = order
+runner.register_order_callback(
+    order.order_id,
+    lambda o, f: print(f"回调触发: {o.order_id[:8]} → {o.status.value}")
+)
+
+# 模拟网关回报
+order.status = OrderStatus.FILLED
+runner.on_order_update(order)
+# 输出: 回调触发: xxxxxxxx → filled
+```
+
+**展示效果**：注册回调后，网关成交回报自动分发到策略和回调函数，订单完成后自动清理。
 
 ---
 
@@ -798,7 +938,7 @@ uv run pytest tests/ -v --tb=short
 | 执行算法 | 2 种（TWAP、VWAP） |
 | AI 因子 | 4 类 7 个（动量×3、波动率×2、RSI、量比） |
 | Web API | 30 个端点 |
-| Web 页面 | 11 个（总览、数据、回测、参数优化、监控告警、模拟盘、风控中心、实时策略、AI实验室、策略库、设置） |
+| Web 页面 | 12 个（总览、数据、回测、参数优化、监控告警、模拟盘、风控中心、实时策略、AI实验室、策略库、运维中心、设置） |
 | CLI 命令 | 4 个（info、data fetch、data list、backtest） |
 | 单元测试 | 55 个用例 |
 | 功能测试项 | 62 项 Web 测试 + 95+ 项全系统测试 |
