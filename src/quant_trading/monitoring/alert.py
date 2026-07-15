@@ -1,12 +1,22 @@
-"""实盘监控与告警系统 - 异常检测、风险告警和通知。"""
+"""实盘监控与告警系统 - 异常检测、风险告警、多渠道通知。
+
+支持推送渠道：
+    - 控制台 / Web 面板（默认）
+    - 邮件（SMTP）
+    - 企业微信 / 钉钉 Webhook
+"""
 
 from __future__ import annotations
 
+import json
 import logging
+import smtplib
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from email.mime.text import MIMEText
 from enum import Enum
 from typing import Any
 
@@ -224,3 +234,127 @@ class AlertManager:
     @property
     def unacknowledged_count(self) -> int:
         return sum(1 for a in self._alerts if not a.acknowledged)
+
+
+# ---------------------------------------------------------------------------
+# 推送渠道 handlers
+# ---------------------------------------------------------------------------
+
+
+class EmailAlertHandler:
+    """通过 SMTP 发送告警邮件。
+
+    使用方式::
+
+        handler = EmailAlertHandler(
+            smtp_host="smtp.qq.com", smtp_port=465, use_ssl=True,
+            username="bot@example.com", password="app_password",
+            sender="bot@example.com", recipients=["admin@example.com"],
+        )
+        manager.add_handler(handler)
+    """
+
+    def __init__(
+        self,
+        smtp_host: str,
+        smtp_port: int = 465,
+        use_ssl: bool = True,
+        username: str = "",
+        password: str = "",
+        sender: str = "",
+        recipients: list[str] | None = None,
+    ) -> None:
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.use_ssl = use_ssl
+        self.username = username
+        self.password = password
+        self.sender = sender or username
+        self.recipients = recipients or []
+
+    def __call__(self, alert: Alert) -> None:
+        if not self.recipients:
+            return
+        subject = f"[{alert.level.value.upper()}] {alert.alert_type.value}: {alert.message[:60]}"
+        body = (
+            f"告警级别: {alert.level.value}\n"
+            f"告警类型: {alert.alert_type.value}\n"
+            f"时间: {alert.timestamp.isoformat()}\n"
+            f"详情: {alert.message}\n"
+            f"数据: {alert.data}"
+        )
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = self.sender
+        msg["To"] = ", ".join(self.recipients)
+
+        try:
+            if self.use_ssl:
+                server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=10)
+            else:
+                server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10)
+                server.starttls()
+            if self.username:
+                server.login(self.username, self.password)
+            server.sendmail(self.sender, self.recipients, msg.as_string())
+            server.quit()
+            logger.info(f"Email alert sent to {self.recipients}")
+        except Exception as e:
+            logger.error(f"Failed to send email alert: {e}")
+
+
+class WebhookAlertHandler:
+    """通过 Webhook（企业微信 / 钉钉 / 飞书等）推送告警。
+
+    企业微信示例::
+
+        handler = WebhookAlertHandler(
+            url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx",
+            platform="wecom",
+        )
+
+    钉钉示例::
+
+        handler = WebhookAlertHandler(
+            url="https://oapi.dingtalk.com/robot/send?access_token=xxx",
+            platform="dingtalk",
+        )
+    """
+
+    PLATFORMS = ("wecom", "dingtalk", "feishu", "generic")
+
+    def __init__(self, url: str, platform: str = "generic") -> None:
+        self.url = url
+        self.platform = platform if platform in self.PLATFORMS else "generic"
+
+    def __call__(self, alert: Alert) -> None:
+        text = (
+            f"**[{alert.level.value.upper()}] {alert.alert_type.value}**\n"
+            f"> {alert.message}\n"
+            f"> 时间: {alert.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        payload = self._build_payload(text)
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            self.url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                logger.info(f"Webhook alert sent ({self.platform}): {resp.status}")
+        except Exception as e:
+            logger.error(f"Failed to send webhook alert ({self.platform}): {e}")
+
+    def _build_payload(self, text: str) -> dict:
+        if self.platform == "wecom":
+            return {"msgtype": "markdown", "markdown": {"content": text}}
+        if self.platform == "dingtalk":
+            return {
+                "msgtype": "markdown",
+                "markdown": {"title": "交易告警", "text": text},
+            }
+        if self.platform == "feishu":
+            return {"msg_type": "text", "content": {"text": text}}
+        return {"text": text}

@@ -79,6 +79,44 @@ class DataEngine:
         event = Event(type=EventType.TICK, data=tick, timestamp=tick.timestamp)
         self._event_bus.publish(event)
 
+    async def fetch_ticks(
+        self,
+        instrument_id: InstrumentId,
+        start: datetime,
+        end: datetime | None = None,
+        feed_name: str | None = None,
+        save: bool = True,
+    ) -> list[Tick]:
+        """从数据源获取 Tick 逐笔数据，可选择保存到本地。"""
+        feed = self._resolve_feed(feed_name)
+        ticks = await feed.get_ticks(instrument_id, start, end)
+
+        if save and ticks:
+            self._store.save_ticks(instrument_id, ticks)
+
+        return ticks
+
+    def load_ticks(
+        self,
+        instrument_id: InstrumentId,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[Tick]:
+        """从本地存储加载 Tick 数据。"""
+        return self._store.load_ticks(instrument_id, start, end)
+
+    def replay_ticks(
+        self,
+        instrument_id: InstrumentId,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> int:
+        """回放本地 Tick 数据，逐条发送到事件总线。"""
+        ticks = self.load_ticks(instrument_id, start, end)
+        for tick in ticks:
+            self.emit_tick(tick)
+        return len(ticks)
+
     def _resolve_feed(self, name: str | None) -> DataFeed:
         """按名称获取数据源，或返回第一个可用的数据源。"""
         if name:

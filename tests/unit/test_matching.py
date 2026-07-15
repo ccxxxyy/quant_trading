@@ -100,7 +100,9 @@ class TestMatchingEngine:
 
     def test_commission_applied(self):
         rate = Decimal("0.001")
-        engine = MatchingEngine(commission_rate=rate, slippage_rate=Decimal("0"))
+        engine = MatchingEngine(
+            commission_rate=rate, slippage_rate=Decimal("0"), transfer_fee_rate=Decimal("0")
+        )
         iid = InstrumentId("TEST", Exchange.SSE)
 
         order = Order(

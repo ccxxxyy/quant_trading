@@ -4,6 +4,7 @@
     - T+1 约束：当日买入的股票不能当日卖出
     - 涨跌停过滤：触及涨跌停板时限制成交
     - 印花税：仅卖出时收取（默认万分之五）
+    - 过户费：买卖双向收取（默认万分之零点二，2022年起沪深统一）
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 class MatchingEngine:
     """模拟订单撮合，支持可配置的滑点和手续费。
 
-    支持市价单、限价单和止损单，基于K线数据进行撮合。
+    支持市价单、限价单、止损单、追踪止损单和条件单。
     滑点模型为价格的固定百分比。
 
     A 股规则（enable_t1=True）：
@@ -35,12 +36,14 @@ class MatchingEngine:
         commission_rate: Decimal = Decimal("0.0003"),
         slippage_rate: Decimal = Decimal("0.0001"),
         stamp_tax_rate: Decimal = Decimal("0.0005"),
+        transfer_fee_rate: Decimal = Decimal("0.00002"),
         enable_t1: bool = False,
         price_limit_pct: float = 0.10,
     ) -> None:
         self._commission_rate = commission_rate
         self._slippage_rate = slippage_rate
         self._stamp_tax_rate = stamp_tax_rate
+        self._transfer_fee_rate = transfer_fee_rate
         self._enable_t1 = enable_t1
         self._price_limit_pct = Decimal(str(price_limit_pct))
         self._pending_orders: list[Order] = []
@@ -48,6 +51,8 @@ class MatchingEngine:
         self._buy_date_qty: dict[str, dict[str, int]] = {}
         # 上一日收盘价：用于计算涨跌停板
         self._prev_close: dict[str, Decimal] = {}
+        # 追踪止损：order_id -> 追踪过程中出现的最优价格
+        self._trailing_best: dict[str, Decimal] = {}
 
     def submit_order(self, order: Order) -> None:
         """将订单提交到撮合引擎。"""
@@ -185,6 +190,12 @@ class MatchingEngine:
                 fill_price = self._apply_slippage(order.stop_price, order.side)
                 return self._create_fill(order, fill_price, bar.timestamp)
 
+        elif order.order_type == OrderType.TRAILING_STOP:
+            return self._try_trailing_stop(order, bar)
+
+        elif order.order_type == OrderType.CONDITIONAL:
+            return self._try_conditional(order, bar)
+
         return None
 
     def _try_match_tick(self, order: Order, tick: Tick) -> Fill | None:
@@ -202,6 +213,59 @@ class MatchingEngine:
 
         return None
 
+    def _try_trailing_stop(self, order: Order, bar: Bar) -> Fill | None:
+        """追踪止损：止损价跟随最优价格浮动。
+
+        卖出追踪止损：记录最高价，当价格回落 trailing_pct 时触发。
+        买入追踪止损：记录最低价，当价格反弹 trailing_pct 时触发。
+        """
+        oid = order.order_id
+        pct = order.trailing_pct if order.trailing_pct > 0 else Decimal("0.05")
+
+        if order.side == OrderSide.SELL:
+            best = self._trailing_best.get(oid, bar.high)
+            best = max(best, bar.high)
+            self._trailing_best[oid] = best
+            trigger = best * (1 - pct)
+            if bar.low <= trigger:
+                fill_price = self._apply_slippage(trigger, order.side)
+                self._trailing_best.pop(oid, None)
+                return self._create_fill(order, fill_price, bar.timestamp)
+        else:
+            best = self._trailing_best.get(oid, bar.low)
+            best = min(best, bar.low)
+            self._trailing_best[oid] = best
+            trigger = best * (1 + pct)
+            if bar.high >= trigger:
+                fill_price = self._apply_slippage(trigger, order.side)
+                self._trailing_best.pop(oid, None)
+                return self._create_fill(order, fill_price, bar.timestamp)
+        return None
+
+    def _try_conditional(self, order: Order, bar: Bar) -> Fill | None:
+        """条件单：当 condition_expr 对当前 bar 评估为 True 时以市价成交。
+
+        支持的变量: open, high, low, close, volume
+        """
+        if not order.condition_expr:
+            return None
+        ns = {
+            "open": float(bar.open),
+            "high": float(bar.high),
+            "low": float(bar.low),
+            "close": float(bar.close),
+            "volume": bar.volume,
+        }
+        try:
+            result = eval(order.condition_expr, {"__builtins__": {}}, ns)  # noqa: S307
+        except Exception:
+            return None
+        if result:
+            order.condition_met = True
+            fill_price = self._apply_slippage(bar.close, order.side)
+            return self._create_fill(order, fill_price, bar.timestamp)
+        return None
+
     def _apply_slippage(self, price: Decimal, side: OrderSide) -> Decimal:
         """对成交价格施加滑点。"""
         slippage = price * self._slippage_rate
@@ -212,10 +276,14 @@ class MatchingEngine:
     def _create_fill(self, order: Order, price: Decimal, timestamp: datetime) -> Fill:
         """创建成交回报并更新订单状态。"""
         quantity = order.remaining_quantity
-        commission = price * quantity * self._commission_rate
+        notional = price * quantity
+        commission = notional * self._commission_rate
         # A 股卖出额外收取印花税
         if order.side == OrderSide.SELL and self._stamp_tax_rate > 0:
-            commission += price * quantity * self._stamp_tax_rate
+            commission += notional * self._stamp_tax_rate
+        # 过户费：买卖双向收取
+        if self._transfer_fee_rate > 0:
+            commission += notional * self._transfer_fee_rate
 
         fill = Fill(
             order_id=order.order_id,
@@ -244,6 +312,7 @@ class MatchingEngine:
         self._pending_orders.clear()
         self._buy_date_qty.clear()
         self._prev_close.clear()
+        self._trailing_best.clear()
 
 
 def _round_limit(price: Decimal, tick: Decimal = Decimal("0.01")) -> Decimal:

@@ -23,6 +23,7 @@ class BacktestRequest(BaseModel):
     use_demo_data: bool = False
     enable_t1: bool = False
     adjust: str = "none"  # "none" / "forward" / "backward"
+    transfer_fee_rate: float = 0.00002  # 过户费率（万分之 0.2）
 
 
 class HealthResponse(BaseModel):
@@ -43,9 +44,13 @@ class OptimizeRequest(BaseModel):
 class PaperOrderRequest(BaseModel):
     symbol: str
     side: str  # "buy" or "sell"
-    order_type: str = "market"  # "market" or "limit"
+    order_type: str = "market"  # market/limit/trailing_stop/conditional
     quantity: int = 100
     price: float | None = None
+    trail_offset: float | None = None
+    trigger_price: float | None = None
+    cond_price: float | None = None
+    cond_direction: str | None = None  # above / below
 
 
 class PaperConfigRequest(BaseModel):

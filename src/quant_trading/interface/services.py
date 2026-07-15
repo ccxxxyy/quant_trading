@@ -101,6 +101,7 @@ INTERVAL_MAP = {
     "15m": BarInterval.MINUTE_15,
     "1h": BarInterval.HOUR_1,
     "1d": BarInterval.DAILY,
+    "tick": BarInterval.TICK,
 }
 
 
@@ -128,20 +129,45 @@ def generate_demo_bars(
     count: int = 250,
     start_price: float = 100.0,
     seed: int = 42,
+    start: datetime | None = None,
+    end: datetime | None = None,
 ) -> list[Bar]:
-    """生成用于演示回测的模拟K线数据。"""
+    """生成用于演示回测的模拟K线数据。
+
+    如果提供了 start/end，则生成覆盖该日期范围的数据（跳过周末）。
+    否则从当前日期往前推 count 个交易日。
+    """
     random.seed(seed)
     bars: list[Bar] = []
     price = Decimal(str(start_price))
-    base_time = datetime(2023, 1, 3)
 
-    for i in range(count):
+    if start and end:
+        s = start if isinstance(start, datetime) else datetime.combine(start, datetime.min.time())
+        e = end if isinstance(end, datetime) else datetime.combine(end, datetime.min.time())
+        trading_days = []
+        current = s
+        while current <= e:
+            if current.weekday() < 5:
+                trading_days.append(current)
+            current += timedelta(days=1)
+        if not trading_days:
+            trading_days = [start + timedelta(days=i) for i in range(count)]
+    else:
+        today = end or datetime.now()
+        trading_days = []
+        d = today - timedelta(days=int(count * 1.5))
+        while len(trading_days) < count:
+            if d.weekday() < 5:
+                trading_days.append(d)
+            d += timedelta(days=1)
+
+    for day in trading_days:
         change = Decimal(str(random.gauss(0, start_price * 0.02)))
         price = max(price + change, Decimal("1"))
         bars.append(
             Bar(
                 instrument_id=instrument_id,
-                timestamp=base_time + timedelta(days=i),
+                timestamp=day,
                 interval=BarInterval.DAILY,
                 open=price - Decimal(str(round(random.uniform(0, 2), 2))),
                 high=price + Decimal(str(round(random.uniform(0, 5), 2))),
@@ -164,6 +190,7 @@ def run_backtest(
     settings: Settings | None = None,
     enable_t1: bool = False,
     adjust: str = "none",
+    transfer_fee_rate: float = 0.00002,
 ) -> dict[str, Any]:
     """运行回测并返回结构化的结果。"""
     from quant_trading.data.adjust import AdjustType
@@ -177,8 +204,9 @@ def run_backtest(
     bars = store.load_bars(instrument_id, BarInterval.DAILY, start, end, adjust=adjust_type)
     used_demo_data = False
 
-    if not bars and use_demo_data:
-        bars = generate_demo_bars(instrument_id)
+    min_bars_for_backtest = 30
+    if len(bars) < min_bars_for_backtest and use_demo_data:
+        bars = generate_demo_bars(instrument_id, start=start, end=end)
         used_demo_data = True
     elif not bars:
         raise ValueError(f"No data for {symbol}. Fetch data first or enable demo mode.")
@@ -188,6 +216,7 @@ def run_backtest(
         commission_rate=settings.backtest.default_commission,
         slippage_rate=settings.backtest.default_slippage,
         enable_t1=enable_t1,
+        transfer_fee_rate=transfer_fee_rate,
     )
     engine.add_bar_data(instrument_id, bars)
 
@@ -276,6 +305,17 @@ async def fetch_market_data(
         data_engine.add_feed(YFinanceFeed())
     else:
         raise ValueError(f"Unknown provider: {provider}")
+
+    if interval == "tick":
+        ticks = await data_engine.fetch_ticks(instrument_id, start, end)
+        return {
+            "symbol": symbol,
+            "tick_count": len(ticks),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "interval": "tick",
+            "provider": provider,
+        }
 
     bars = await data_engine.fetch_bars(instrument_id, bar_interval, start, end)
     return {
