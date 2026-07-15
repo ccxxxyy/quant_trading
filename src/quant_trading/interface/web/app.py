@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-import os as _os
-
-for _k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-    _os.environ.pop(_k, None)
-_os.environ["NO_PROXY"] = "*"
-
 import asyncio
 import dataclasses
 from datetime import datetime
@@ -1274,9 +1268,16 @@ async def live_active_orders():
 
 def main():
     """quant-web 命令的入口点。"""
+    import os
     import sys
 
     import uvicorn
+
+    # AkShare 访问东方财富等国内站点，不需要代理。
+    # 许多用户本机开启 Clash/V2Ray，会导致连接被拒。
+    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = "*"
 
     use_reload = sys.platform != "win32"
 
