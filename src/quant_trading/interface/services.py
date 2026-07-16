@@ -179,6 +179,34 @@ def generate_demo_bars(
     return bars
 
 
+def _generate_correlated_bars(
+    base_bars: list[Bar], instrument_id: InstrumentId, correlation: float = 0.8
+) -> list[Bar]:
+    """基于已有K线生成一组相关的配对标的K线数据（用于配对交易演示）。"""
+    random.seed(123)
+    bars: list[Bar] = []
+    for bar in base_bars:
+        noise = Decimal(str(round(random.gauss(0, float(bar.close) * 0.01), 2)))
+        offset = Decimal(str(round(float(bar.close) * 0.05, 2)))
+        close = bar.close + offset + noise
+        high = close + Decimal(str(round(random.uniform(0, 3), 2)))
+        low = close - Decimal(str(round(random.uniform(0, 3), 2)))
+        open_ = close - Decimal(str(round(random.uniform(-1, 1), 2)))
+        bars.append(
+            Bar(
+                instrument_id=instrument_id,
+                timestamp=bar.timestamp,
+                interval=bar.interval,
+                open=open_,
+                high=high,
+                low=low,
+                close=close,
+                volume=random.randint(10000, 80000),
+            )
+        )
+    return bars
+
+
 def run_backtest(
     strategy_id: str,
     symbol: str,
@@ -220,6 +248,30 @@ def run_backtest(
     )
     engine.add_bar_data(instrument_id, bars)
 
+    # 为网格策略自动计算合理的价格边界
+    if strategy_id == "grid" and bars:
+        params = dict(params or {})
+        closes = [float(b.close) for b in bars]
+        price_min, price_max = min(closes), max(closes)
+        margin = (price_max - price_min) * 0.1 or price_min * 0.1
+        if "upper_price" not in params or params["upper_price"] == 110.0:
+            params["upper_price"] = round(price_max + margin, 2)
+        if "lower_price" not in params or params["lower_price"] == 90.0:
+            params["lower_price"] = round(price_min - margin, 2)
+
+    # 配对策略在单标的回测时，生成第二个相关标的的数据
+    if strategy_id == "pair" and bars:
+        params = dict(params or {})
+        pair_b_symbol = params.get("instrument_b", "")
+        if not pair_b_symbol:
+            pair_b_symbol = f"PAIR_B.{instrument_id.exchange.value}"
+            params["instrument_b"] = pair_b_symbol
+        if not params.get("instrument_a"):
+            params["instrument_a"] = str(instrument_id)
+        pair_b_id = InstrumentId.from_str(pair_b_symbol)
+        pair_b_bars = _generate_correlated_bars(bars, pair_b_id)
+        engine.add_bar_data(pair_b_id, pair_b_bars)
+
     strategy = load_strategy(strategy_id, str(instrument_id), params)
     ctx = StrategyContext(engine, strategy.strategy_id)
     strategy.attach(ctx)
@@ -253,26 +305,37 @@ def run_backtest(
     }
 
 
+def _safe_float(val: Any) -> float:
+    """确保数值可以安全序列化为 JSON（处理 complex / nan / inf）。"""
+    import math
+
+    if isinstance(val, complex):
+        return val.real
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return 0.0
+    return float(val)
+
+
 def metrics_to_dict(metrics: PerformanceMetrics) -> dict[str, Any]:
     return {
-        "total_return": metrics.total_return,
-        "annual_return": metrics.annual_return,
-        "sharpe_ratio": metrics.sharpe_ratio,
-        "sortino_ratio": metrics.sortino_ratio,
-        "max_drawdown": metrics.max_drawdown,
+        "total_return": _safe_float(metrics.total_return),
+        "annual_return": _safe_float(metrics.annual_return),
+        "sharpe_ratio": _safe_float(metrics.sharpe_ratio),
+        "sortino_ratio": _safe_float(metrics.sortino_ratio),
+        "max_drawdown": _safe_float(metrics.max_drawdown),
         "max_drawdown_duration_days": metrics.max_drawdown_duration_days,
-        "calmar_ratio": metrics.calmar_ratio,
-        "win_rate": metrics.win_rate,
-        "profit_factor": metrics.profit_factor,
+        "calmar_ratio": _safe_float(metrics.calmar_ratio),
+        "win_rate": _safe_float(metrics.win_rate),
+        "profit_factor": _safe_float(metrics.profit_factor),
         "total_trades": metrics.total_trades,
         "winning_trades": metrics.winning_trades,
         "losing_trades": metrics.losing_trades,
-        "avg_win": metrics.avg_win,
-        "avg_loss": metrics.avg_loss,
-        "avg_trade_duration_days": metrics.avg_trade_duration_days,
-        "volatility": metrics.volatility,
-        "initial_capital": metrics.initial_capital,
-        "final_capital": metrics.final_capital,
+        "avg_win": _safe_float(metrics.avg_win),
+        "avg_loss": _safe_float(metrics.avg_loss),
+        "avg_trade_duration_days": _safe_float(metrics.avg_trade_duration_days),
+        "volatility": _safe_float(metrics.volatility),
+        "initial_capital": _safe_float(metrics.initial_capital),
+        "final_capital": _safe_float(metrics.final_capital),
         "start_date": metrics.start_date.isoformat() if metrics.start_date else None,
         "end_date": metrics.end_date.isoformat() if metrics.end_date else None,
     }
