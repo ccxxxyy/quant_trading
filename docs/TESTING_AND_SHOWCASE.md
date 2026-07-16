@@ -492,6 +492,17 @@
 | W-107 | 告警推送 Web 配置 | 监控告警 → 选择 Webhook/Email → 保存并测试 | toast 提示配置成功 |
 | W-108 | Tick Web 拉取 | 数据管理 → 周期选「Tick 逐笔」→ 获取 | 成功返回 tick 数据并存储 |
 
+#### 10.21 P2 可视化增强
+
+| ID | 测试项 | 操作步骤 | 预期结果 |
+|----|--------|---------|---------|
+| W-109 | K线叠加买卖点 | 回测实验室 → 运行回测 → 查看「K 线叠加买卖点」面板 | 权益曲线上用 ▲/▼ 标注买入/卖出位置 |
+| W-110 | Monte Carlo 运行 | 回测实验室 → 运行回测 → 「Monte Carlo 压力测试」→ 运行模拟 | KPI 显示 5%/50%/95% 分位，两张图表渲染 |
+| W-111 | Monte Carlo API | `POST /api/backtest/montecarlo`（同回测参数） | 返回 n_simulations=500, stats, distribution, percentile_curves |
+| W-112 | 复盘报表运行 | 回测实验室 → 运行回测 → 「复盘报表」→ 生成报表 | KPI 显示连胜/连亏/单笔盈亏，月度柱状图渲染 |
+| W-113 | 复盘报表 API | `POST /api/backtest/review`（同回测参数） | 返回 monthly[], streaks, trade_analysis |
+| W-114 | 参数热力图 | 参数优化 → 运行优化 → 回测页查看「参数优化热力图」 | 颜色矩阵表格，绿=高Sharpe，红=低Sharpe |
+
 ---
 
 ### 十一、代码质量
@@ -937,10 +948,10 @@ uv run pytest tests/ -v --tb=short
 | 风控检查 | 4 重事前检查 + 紧急冻结/清仓/策略暂停 |
 | 执行算法 | 2 种（TWAP、VWAP） |
 | AI 因子 | 4 类 7 个（动量×3、波动率×2、RSI、量比） |
-| Web API | 30 个端点 |
+| Web API | 32 个端点 |
 | Web 页面 | 12 个（总览、数据、回测、参数优化、监控告警、模拟盘、风控中心、实时策略、AI实验室、策略库、运维中心、设置） |
 | CLI 命令 | 4 个（info、data fetch、data list、backtest） |
 | 单元测试 | 55 个用例 |
-| 功能测试项 | 62 项 Web 测试 + 95+ 项全系统测试 |
-| 展示场景 | 17 个（含 A 股增强、紧急风控、实时运行器） |
+| 功能测试项 | 114 项 Web 测试 + 95+ 项全系统测试 |
+| 展示场景 | 20 个（含 A 股增强、紧急风控、Monte Carlo、复盘报表、热力图） |
 | CI 矩阵 | 4 种环境（2 OS × 2 Python） |

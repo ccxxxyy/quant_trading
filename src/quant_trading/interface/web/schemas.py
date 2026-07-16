@@ -57,3 +57,21 @@ class PaperConfigRequest(BaseModel):
     initial_capital: float = 1_000_000.0
     commission_rate: float = 0.0003
     slippage_rate: float = 0.0001
+
+
+class MonteCarloRequest(BaseModel):
+    strategy: str
+    symbol: str
+    start: str
+    end: str | None = None
+    capital: float = 1_000_000.0
+    params: dict | None = None
+    use_demo_data: bool = True
+    num_simulations: int = 100
+    noise_pct: float = 0.02
+
+
+class ReviewReportRequest(BaseModel):
+    symbol: str
+    start: str
+    end: str | None = None
