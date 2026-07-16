@@ -59,6 +59,8 @@ class TurtleTradingStrategy(BarSeriesStrategy):
             return
 
         instrument_id = bar.instrument_id
+        entry_period = self._params["entry_period"]
+        exit_period = self._params["exit_period"]
 
         # 计算真实波幅（True Range）
         if self._prev_close is not None:
@@ -69,56 +71,58 @@ class TurtleTradingStrategy(BarSeriesStrategy):
             )
             self._tr_values.append(tr)
 
-        self._highs.append(bar.high)
-        self._lows.append(bar.low)
-        self._prev_close = bar.close
+        # 先用历史数据计算通道（不含当前 bar），再追加当前 bar
+        can_trade = (
+            len(self._highs) >= entry_period and len(self._tr_values) >= self._params["atr_period"]
+        )
 
-        entry_period = self._params["entry_period"]
-        exit_period = self._params["exit_period"]
+        if can_trade:
+            # 计算 ATR
+            atr = sum(self._tr_values) / len(self._tr_values)
 
-        if len(self._highs) < entry_period or len(self._tr_values) < self._params["atr_period"]:
-            return
-
-        # 计算 ATR
-        atr = sum(self._tr_values) / len(self._tr_values)
-        if atr == 0:
-            return
-
-        # 唐奇安通道（Donchian Channel）
-        channel_high = max(list(self._highs)[-entry_period:])  # N日最高价
-        if len(self._lows) >= exit_period:
+            # 唐奇安通道：用前 N 日数据（不含当前 bar）
+            channel_high = max(list(self._highs)[-entry_period:])
             exit_lows = list(self._lows)[-exit_period:]
+            channel_low = min(exit_lows) if exit_lows else bar.low
+
+            # 追加当前 bar 的高低价
+            self._highs.append(bar.high)
+            self._lows.append(bar.low)
+            self._prev_close = bar.close
+
+            if atr == 0:
+                return
+
+            position = self.ctx.get_position(instrument_id)
+            quantity = self._params["quantity"]
+            max_units = self._params["max_units"]
+
+            if position.is_flat:
+                # 空仓：价格突破上轨 → 做多入场
+                if bar.close > channel_high:
+                    self.ctx.buy_market(instrument_id, quantity)
+                    self._entry_price = bar.close
+                    self._units_held = 1
+            elif position.quantity > 0:
+                # 止损检查：跌破出场下轨 或 亏损超过 2×ATR
+                stop_price = self._entry_price - 2 * atr if self._entry_price else channel_low
+                if bar.close < channel_low or bar.close < stop_price:
+                    self.ctx.close_position(instrument_id)
+                    self._entry_price = None
+                    self._units_held = 0
+                # 加仓：价格在入场价基础上每上涨 0.5×ATR 加仓一次
+                elif (
+                    self._entry_price
+                    and self._units_held < max_units
+                    and bar.close > self._entry_price + Decimal("0.5") * atr * self._units_held
+                ):
+                    self.ctx.buy_market(instrument_id, quantity)
+                    self._units_held += 1
         else:
-            exit_lows = list(self._lows)
-        channel_low = min(exit_lows)  # M日最低价
-
-        position = self.ctx.get_position(instrument_id)
-        quantity = self._params["quantity"]
-        max_units = self._params["max_units"]
-
-        if position.is_flat:
-            # 空仓：价格突破上轨 → 做多入场
-            if bar.close > channel_high:
-                self.ctx.buy_market(instrument_id, quantity)
-                self._entry_price = bar.close
-                self._units_held = 1
-        elif position.quantity > 0:
-            # 持有多仓
-
-            # 止损检查：跌破出场下轨 或 亏损超过 2×ATR
-            stop_price = self._entry_price - 2 * atr if self._entry_price else channel_low
-            if bar.close < channel_low or bar.close < stop_price:
-                self.ctx.close_position(instrument_id)
-                self._entry_price = None
-                self._units_held = 0
-            # 加仓：价格在入场价基础上每上涨 0.5×ATR 加仓一次
-            elif (
-                self._entry_price
-                and self._units_held < max_units
-                and bar.close > self._entry_price + Decimal("0.5") * atr * self._units_held
-            ):
-                self.ctx.buy_market(instrument_id, quantity)
-                self._units_held += 1
+            # 数据不足时仅追加历史数据
+            self._highs.append(bar.high)
+            self._lows.append(bar.low)
+            self._prev_close = bar.close
 
     def on_stop(self) -> None:
         self._highs.clear()

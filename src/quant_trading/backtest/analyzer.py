@@ -84,7 +84,11 @@ class BacktestAnalyzer:
         metrics.total_return = (values[-1] - initial_capital) / initial_capital
         days = (timestamps[-1] - timestamps[0]).days
         if days > 0:
-            metrics.annual_return = (1 + metrics.total_return) ** (365.0 / days) - 1
+            base = 1 + metrics.total_return
+            if base > 0:
+                metrics.annual_return = base ** (365.0 / days) - 1
+            else:
+                metrics.annual_return = -1.0
 
         # 波动率
         if returns_list:
