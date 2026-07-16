@@ -73,8 +73,7 @@ class TurtleTradingStrategy(BarSeriesStrategy):
 
         # 先用历史数据计算通道（不含当前 bar），再追加当前 bar
         can_trade = (
-            len(self._highs) >= entry_period
-            and len(self._tr_values) >= self._params["atr_period"]
+            len(self._highs) >= entry_period and len(self._tr_values) >= self._params["atr_period"]
         )
 
         if can_trade:
