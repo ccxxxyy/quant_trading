@@ -81,7 +81,10 @@ async def index():
     """提供仪表盘单页应用。"""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(
+            index_file,
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
     return {"message": "Quant Trading API", "docs": "/docs"}
 
 
@@ -197,6 +200,216 @@ async def backtest_compare(req: BacktestRequest):
             except Exception:
                 pass
         return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ── Monte Carlo Stress Test API ────────────────────────────
+
+
+@app.post("/api/backtest/montecarlo")
+async def backtest_montecarlo(req: BacktestRequest):
+    """对回测交易序列做 Monte Carlo 随机扰动压力测试。"""
+    import random
+
+    try:
+        start = datetime.strptime(req.start, "%Y-%m-%d")
+        end = datetime.strptime(req.end, "%Y-%m-%d") if req.end else None
+        base = run_backtest(
+            strategy_id=req.strategy,
+            symbol=req.symbol,
+            start=start,
+            end=end,
+            capital=req.capital,
+            params=req.params,
+            use_demo_data=req.use_demo_data,
+            enable_t1=req.enable_t1,
+            adjust=req.adjust,
+            transfer_fee_rate=req.transfer_fee_rate,
+        )
+
+        trades = base["trades"]
+        if not trades:
+            raise ValueError("回测无交易记录，无法做 Monte Carlo 分析")
+
+        pnl_list = [t["pnl"] for t in trades]
+        capital = req.capital
+        n_sims = 500
+        sim_finals = []
+        sim_drawdowns = []
+        percentile_curves: list[list[float]] = []
+
+        for _ in range(n_sims):
+            shuffled = pnl_list[:]
+            random.shuffle(shuffled)
+            eq = capital
+            peak = eq
+            max_dd = 0.0
+            curve = [eq]
+            for pnl in shuffled:
+                eq += pnl
+                curve.append(eq)
+                if eq > peak:
+                    peak = eq
+                dd = (peak - eq) / peak if peak > 0 else 0
+                if dd > max_dd:
+                    max_dd = dd
+            sim_finals.append(eq)
+            sim_drawdowns.append(max_dd)
+            percentile_curves.append(curve)
+
+        sim_finals.sort()
+        sim_drawdowns.sort()
+        n = len(sim_finals)
+
+        p5_idx = max(0, int(n * 0.05) - 1)
+        p25_idx = max(0, int(n * 0.25) - 1)
+        p50_idx = max(0, int(n * 0.50) - 1)
+        p75_idx = max(0, int(n * 0.75) - 1)
+        p95_idx = min(n - 1, int(n * 0.95))
+
+        max_len = max(len(c) for c in percentile_curves)
+        p5_curve, p50_curve, p95_curve = [], [], []
+        for i in range(max_len):
+            vals = sorted(c[i] for c in percentile_curves if i < len(c))
+            if not vals:
+                break
+            p5_curve.append(vals[max(0, int(len(vals) * 0.05) - 1)])
+            p50_curve.append(vals[len(vals) // 2])
+            p95_curve.append(vals[min(len(vals) - 1, int(len(vals) * 0.95))])
+
+        return {
+            "n_simulations": n_sims,
+            "n_trades": len(pnl_list),
+            "base_final": base["metrics"]["final_capital"],
+            "base_return": base["metrics"]["total_return"],
+            "base_max_dd": base["metrics"]["max_drawdown"],
+            "stats": {
+                "mean_final": sum(sim_finals) / n,
+                "p5_final": sim_finals[p5_idx],
+                "p25_final": sim_finals[p25_idx],
+                "p50_final": sim_finals[p50_idx],
+                "p75_final": sim_finals[p75_idx],
+                "p95_final": sim_finals[p95_idx],
+                "worst_final": sim_finals[0],
+                "best_final": sim_finals[-1],
+                "mean_max_dd": sum(sim_drawdowns) / n,
+                "p95_max_dd": sim_drawdowns[p95_idx],
+                "worst_max_dd": sim_drawdowns[-1],
+            },
+            "distribution": {
+                "finals": [
+                    round(sim_finals[min(n - 1, int(n * p / 100))], 2) for p in range(0, 101, 5)
+                ],
+                "drawdowns": [
+                    round(sim_drawdowns[min(n - 1, int(n * p / 100))] * 100, 2)
+                    for p in range(0, 101, 5)
+                ],
+            },
+            "percentile_curves": {
+                "p5": [round(v, 2) for v in p5_curve],
+                "p50": [round(v, 2) for v in p50_curve],
+                "p95": [round(v, 2) for v in p95_curve],
+            },
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ── Review Report API ──────────────────────────────────────
+
+
+@app.post("/api/backtest/review")
+async def backtest_review(req: BacktestRequest):
+    """生成回测复盘报表：按月/按周统计、最大连胜/连亏、持仓分析。"""
+    from collections import defaultdict
+
+    try:
+        start = datetime.strptime(req.start, "%Y-%m-%d")
+        end = datetime.strptime(req.end, "%Y-%m-%d") if req.end else None
+        result = run_backtest(
+            strategy_id=req.strategy,
+            symbol=req.symbol,
+            start=start,
+            end=end,
+            capital=req.capital,
+            params=req.params,
+            use_demo_data=req.use_demo_data,
+            enable_t1=req.enable_t1,
+            adjust=req.adjust,
+            transfer_fee_rate=req.transfer_fee_rate,
+        )
+
+        trades = result["trades"]
+        equity = result["equity_curve"]
+        metrics = result["metrics"]
+
+        monthly: dict[str, dict] = defaultdict(lambda: {"pnl": 0.0, "trades": 0, "wins": 0})
+        for t in trades:
+            month_key = t["entry_time"][:7]
+            monthly[month_key]["pnl"] += t["pnl"]
+            monthly[month_key]["trades"] += 1
+            if t["pnl"] > 0:
+                monthly[month_key]["wins"] += 1
+
+        monthly_list = []
+        for k in sorted(monthly.keys()):
+            m = monthly[k]
+            wr = m["wins"] / m["trades"] if m["trades"] > 0 else 0
+            monthly_list.append(
+                {
+                    "month": k,
+                    "pnl": round(m["pnl"], 2),
+                    "trades": m["trades"],
+                    "win_rate": round(wr, 4),
+                }
+            )
+
+        streak_win, streak_lose, cur_win, cur_lose = 0, 0, 0, 0
+        for t in trades:
+            if t["pnl"] > 0:
+                cur_win += 1
+                cur_lose = 0
+            else:
+                cur_lose += 1
+                cur_win = 0
+            streak_win = max(streak_win, cur_win)
+            streak_lose = max(streak_lose, cur_lose)
+
+        win_pnls = [t["pnl"] for t in trades if t["pnl"] > 0]
+        lose_pnls = [t["pnl"] for t in trades if t["pnl"] <= 0]
+        durations = []
+        for t in trades:
+            try:
+                entry = datetime.fromisoformat(t["entry_time"])
+                exit_ = datetime.fromisoformat(t["exit_time"])
+                durations.append((exit_ - entry).days)
+            except Exception:
+                pass
+
+        return {
+            "metrics": metrics,
+            "monthly": monthly_list,
+            "streaks": {
+                "max_consecutive_wins": streak_win,
+                "max_consecutive_losses": streak_lose,
+            },
+            "trade_analysis": {
+                "total": len(trades),
+                "avg_win": round(sum(win_pnls) / len(win_pnls), 2) if win_pnls else 0,
+                "avg_loss": round(sum(lose_pnls) / len(lose_pnls), 2) if lose_pnls else 0,
+                "largest_win": round(max(win_pnls), 2) if win_pnls else 0,
+                "largest_loss": round(min(lose_pnls), 2) if lose_pnls else 0,
+                "avg_duration_days": round(sum(durations) / len(durations), 1) if durations else 0,
+                "max_duration_days": max(durations) if durations else 0,
+                "min_duration_days": min(durations) if durations else 0,
+            },
+            "equity_curve": equity,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

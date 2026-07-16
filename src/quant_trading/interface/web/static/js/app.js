@@ -314,10 +314,19 @@ function updateMetrics(metrics) {
     "m-pf": [fmtNum(metrics.profit_factor, 2), metrics.profit_factor],
     "m-trades": [metrics.total_trades, null],
     "m-final": [fmtNum(metrics.final_capital, 0), metrics.final_capital - metrics.initial_capital],
+    "m-winning": [metrics.winning_trades ?? "-", metrics.winning_trades],
+    "m-losing": [metrics.losing_trades ?? "-", -(metrics.losing_trades ?? 0)],
+    "m-avg-win": [fmtNum(metrics.avg_win, 2), metrics.avg_win],
+    "m-avg-loss": [fmtNum(metrics.avg_loss, 2), metrics.avg_loss],
+    "m-volatility": [fmtPct(metrics.volatility), -Math.abs(metrics.volatility ?? 0)],
+    "m-avg-dur": [metrics.avg_trade_duration_days != null ? fmtNum(metrics.avg_trade_duration_days, 1) + " 天" : "-", null],
+    "m-dd-days": [metrics.max_drawdown_duration_days != null ? metrics.max_drawdown_duration_days + " 天" : "-", -(metrics.max_drawdown_duration_days ?? 0)],
+    "m-initial": [fmtNum(metrics.initial_capital, 0), null],
   };
 
   for (const [id, [text, colorVal]] of Object.entries(fields)) {
     const el = document.getElementById(id);
+    if (!el) continue;
     el.textContent = text;
     if (colorVal != null) setMetricColor(el, colorVal);
   }
@@ -381,8 +390,12 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     updateMetrics(result.metrics);
     renderEquityChart("equity-chart", result.equity_curve);
     renderDrawdownChart(result.equity_curve);
+    renderKlineWithTrades(result.equity_curve, result.trades);
     updateTradesTable(result.trades);
     updateDashboard();
+
+    document.getElementById("run-montecarlo-btn").disabled = false;
+    document.getElementById("run-review-btn").disabled = false;
 
     const mode = result.used_demo_data ? "（演示数据）" : "（真实数据）";
     toast(`回测完成${mode}: 收益率 ${fmtPct(result.metrics.total_return)}`, "success");
@@ -430,6 +443,252 @@ function renderDrawdownChart(equityCurve) {
     },
     options: chartOptions("回撤 (%)"),
   });
+}
+
+// ── K-line with Trade Markers ───────────────────────────────
+
+function renderKlineWithTrades(equityCurve, trades) {
+  destroyChart("kline-trades-chart");
+  const emptyEl = document.getElementById("kline-trades-empty");
+  const ctx = document.getElementById("kline-trades-chart");
+  if (!ctx || !equityCurve?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
+  if (emptyEl) emptyEl.style.display = "none";
+
+  const labels = equityCurve.map(p => p.timestamp?.slice(0, 10) || "");
+  const prices = equityCurve.map(p => p.equity);
+
+  const buyPoints = new Array(labels.length).fill(null);
+  const sellPoints = new Array(labels.length).fill(null);
+
+  for (const t of (trades || [])) {
+    const entryDate = t.entry_time?.slice(0, 10);
+    const exitDate = t.exit_time?.slice(0, 10);
+    const entryIdx = labels.indexOf(entryDate);
+    const exitIdx = labels.indexOf(exitDate);
+    if (entryIdx >= 0) buyPoints[entryIdx] = prices[entryIdx];
+    if (exitIdx >= 0) sellPoints[exitIdx] = prices[exitIdx];
+  }
+
+  charts["kline-trades-chart"] = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label: "权益", data: prices, borderColor: "#3b82f6", borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false },
+        { label: "买入 ▲", data: buyPoints, borderColor: "#22c55e", backgroundColor: "#22c55e", pointRadius: 7, pointStyle: "triangle", showLine: false },
+        { label: "卖出 ▼", data: sellPoints, borderColor: "#ef4444", backgroundColor: "#ef4444", pointRadius: 7, pointStyle: "triangle", rotation: 180, showLine: false },
+      ],
+    },
+    options: { ...chartOptions("权益 + 买卖点"), plugins: { ...chartOptions("").plugins, legend: { display: true, labels: { color: "#94a3b8", font: { size: 11 } } } } },
+  });
+}
+
+// ── Monte Carlo Stress Test ────────────────────────────────
+
+document.getElementById("run-montecarlo-btn").addEventListener("click", async () => {
+  if (!lastBacktestResult) { toast("请先运行回测", "error"); return; }
+  const bt = document.getElementById("backtest-form");
+  const fd = new FormData(bt);
+  const params = {};
+  for (const [key, val] of fd.entries()) {
+    if (key.startsWith("param_")) { params[key.replace("param_", "")] = isNaN(Number(val)) ? val : Number(val); }
+  }
+  showLoading(true);
+  try {
+    const data = await api("/backtest/montecarlo", {
+      method: "POST",
+      body: JSON.stringify({
+        strategy: fd.get("strategy"), symbol: fd.get("symbol"),
+        start: fd.get("start"), end: fd.get("end") || null,
+        capital: Number(fd.get("capital")), params,
+        use_demo_data: fd.get("use_demo_data") === "on",
+        enable_t1: fd.get("enable_t1") === "on",
+        adjust: fd.get("adjust") || "none",
+        transfer_fee_rate: (Number(fd.get("transfer_fee_rate")) || 0.2) / 10000,
+      }),
+    });
+    document.getElementById("mc-stats").style.display = "block";
+    document.getElementById("mc-empty").style.display = "none";
+    document.getElementById("mc-base-final").textContent = fmtNum(data.base_final);
+    document.getElementById("mc-p5").textContent = fmtNum(data.stats.p5_final);
+    document.getElementById("mc-p50").textContent = fmtNum(data.stats.p50_final);
+    document.getElementById("mc-p95").textContent = fmtNum(data.stats.p95_final);
+    document.getElementById("mc-avg-dd").textContent = fmtPct(data.stats.mean_max_dd);
+    document.getElementById("mc-p95-dd").textContent = fmtPct(data.stats.p95_max_dd);
+    document.getElementById("mc-worst-dd").textContent = fmtPct(data.stats.worst_max_dd);
+    renderMCPercentileChart(data.percentile_curves);
+    renderMCDistributionChart(data.distribution);
+    toast(`Monte Carlo 完成: ${data.n_simulations} 次模拟, ${data.n_trades} 笔交易`, "success");
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+function renderMCPercentileChart(curves) {
+  destroyChart("mc-percentile-chart");
+  const ctx = document.getElementById("mc-percentile-chart");
+  if (!ctx) return;
+  const len = curves.p50.length;
+  const labels = Array.from({ length: len }, (_, i) => `T${i}`);
+  charts["mc-percentile-chart"] = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label: "95% 最优路径", data: curves.p95, borderColor: "#22c55e", borderWidth: 1.2, pointRadius: 0, tension: 0.3, fill: false },
+        { label: "50% 中位路径", data: curves.p50, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.3, fill: false },
+        { label: "5% 最差路径", data: curves.p5, borderColor: "#ef4444", borderWidth: 1.2, pointRadius: 0, tension: 0.3, fill: false },
+      ],
+    },
+    options: { ...chartOptions("Monte Carlo 权益分布带"), plugins: { legend: { display: true, labels: { color: "#94a3b8", font: { size: 11 } } } } },
+  });
+}
+
+function renderMCDistributionChart(dist) {
+  destroyChart("mc-distribution-chart");
+  const ctx = document.getElementById("mc-distribution-chart");
+  if (!ctx) return;
+  const labels = dist.finals.map((_, i) => `${i * 5}%`);
+  charts["mc-distribution-chart"] = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{ label: "最终资金分布", data: dist.finals, backgroundColor: "rgba(59,130,246,0.6)", borderColor: "#3b82f6", borderWidth: 1 }],
+    },
+    options: { ...chartOptions("最终资金 (按百分位)"), plugins: { legend: { display: false } } },
+  });
+}
+
+// ── Review Report ──────────────────────────────────────────
+
+document.getElementById("run-review-btn").addEventListener("click", async () => {
+  if (!lastBacktestResult) { toast("请先运行回测", "error"); return; }
+  const bt = document.getElementById("backtest-form");
+  const fd = new FormData(bt);
+  const params = {};
+  for (const [key, val] of fd.entries()) {
+    if (key.startsWith("param_")) { params[key.replace("param_", "")] = isNaN(Number(val)) ? val : Number(val); }
+  }
+  showLoading(true);
+  try {
+    const data = await api("/backtest/review", {
+      method: "POST",
+      body: JSON.stringify({
+        strategy: fd.get("strategy"), symbol: fd.get("symbol"),
+        start: fd.get("start"), end: fd.get("end") || null,
+        capital: Number(fd.get("capital")), params,
+        use_demo_data: fd.get("use_demo_data") === "on",
+        enable_t1: fd.get("enable_t1") === "on",
+        adjust: fd.get("adjust") || "none",
+        transfer_fee_rate: (Number(fd.get("transfer_fee_rate")) || 0.2) / 10000,
+      }),
+    });
+    document.getElementById("review-stats").style.display = "block";
+    document.getElementById("review-empty").style.display = "none";
+    document.getElementById("rv-streak-win").textContent = data.streaks.max_consecutive_wins;
+    document.getElementById("rv-streak-lose").textContent = data.streaks.max_consecutive_losses;
+    document.getElementById("rv-largest-win").textContent = fmtNum(data.trade_analysis.largest_win);
+    document.getElementById("rv-largest-loss").textContent = fmtNum(data.trade_analysis.largest_loss);
+    document.getElementById("rv-avg-dur").textContent = data.trade_analysis.avg_duration_days + " 天";
+    document.getElementById("rv-avg-win").textContent = fmtNum(data.trade_analysis.avg_win);
+    document.getElementById("rv-avg-loss").textContent = fmtNum(data.trade_analysis.avg_loss);
+    renderReviewMonthlyChart(data.monthly);
+    renderReviewMonthlyTable(data.monthly);
+    toast(`复盘报表生成完成: ${data.monthly.length} 个月`, "success");
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+function renderReviewMonthlyChart(monthly) {
+  destroyChart("review-monthly-chart");
+  const ctx = document.getElementById("review-monthly-chart");
+  if (!ctx || !monthly?.length) return;
+  charts["review-monthly-chart"] = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: monthly.map(m => m.month),
+      datasets: [{
+        label: "月度盈亏",
+        data: monthly.map(m => m.pnl),
+        backgroundColor: monthly.map(m => m.pnl >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)"),
+        borderColor: monthly.map(m => m.pnl >= 0 ? "#22c55e" : "#ef4444"),
+        borderWidth: 1,
+      }],
+    },
+    options: { ...chartOptions("盈亏 (元)"), plugins: { legend: { display: false } } },
+  });
+}
+
+function renderReviewMonthlyTable(monthly) {
+  const tbody = document.querySelector("#review-monthly-table tbody");
+  if (!tbody) return;
+  tbody.innerHTML = monthly.map(m => {
+    const cls = m.pnl >= 0 ? "positive" : "negative";
+    return `<tr><td>${m.month}</td><td class="${cls}">${fmtNum(m.pnl)}</td><td>${m.trades}</td><td>${fmtPct(m.win_rate)}</td></tr>`;
+  }).join("") || '<tr><td colspan="4" class="empty-state">无数据</td></tr>';
+}
+
+// ── Parameter Heatmap ──────────────────────────────────────
+
+let lastOptimizeResults = null;
+
+function renderHeatmap(results) {
+  destroyChart("heatmap-chart");
+  const emptyEl = document.getElementById("heatmap-empty");
+  const ctx = document.getElementById("heatmap-chart");
+  if (!ctx || !results?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
+
+  const paramKeys = Object.keys(results[0].params || {});
+  if (paramKeys.length < 2) { if (emptyEl) emptyEl.style.display = "block"; return; }
+  if (emptyEl) emptyEl.style.display = "none";
+
+  const xKey = paramKeys[0], yKey = paramKeys[1];
+  const xVals = [...new Set(results.map(r => r.params[xKey]))].sort((a, b) => a - b);
+  const yVals = [...new Set(results.map(r => r.params[yKey]))].sort((a, b) => a - b);
+
+  const grid = {};
+  for (const r of results) {
+    const key = `${r.params[xKey]}_${r.params[yKey]}`;
+    grid[key] = r.metrics?.sharpe_ratio ?? 0;
+  }
+
+  const allSharpes = Object.values(grid);
+  const minS = Math.min(...allSharpes), maxS = Math.max(...allSharpes);
+
+  const data = [];
+  for (let yi = 0; yi < yVals.length; yi++) {
+    for (let xi = 0; xi < xVals.length; xi++) {
+      const s = grid[`${xVals[xi]}_${yVals[yi]}`] ?? 0;
+      data.push({ x: xi, y: yi, v: s });
+    }
+  }
+
+  const container = document.getElementById("heatmap-container");
+  container.innerHTML = "";
+  const table = document.createElement("table");
+  table.className = "data-table";
+  table.style.fontSize = "0.8rem";
+  table.style.textAlign = "center";
+
+  let html = `<thead><tr><th>${xKey} \\ ${yKey}</th>`;
+  for (const y of yVals) html += `<th>${y}</th>`;
+  html += "</tr></thead><tbody>";
+
+  for (let xi = 0; xi < xVals.length; xi++) {
+    html += `<tr><td><strong>${xVals[xi]}</strong></td>`;
+    for (let yi = 0; yi < yVals.length; yi++) {
+      const s = grid[`${xVals[xi]}_${yVals[yi]}`] ?? 0;
+      const norm = maxS > minS ? (s - minS) / (maxS - minS) : 0.5;
+      const r = Math.round(239 * (1 - norm) + 34 * norm);
+      const g = Math.round(68 * (1 - norm) + 197 * norm);
+      const b = Math.round(68 * (1 - norm) + 94 * norm);
+      const bg = `rgba(${r},${g},${b},0.7)`;
+      html += `<td style="background:${bg};color:#fff;font-weight:600">${s.toFixed(2)}</td>`;
+    }
+    html += "</tr>";
+  }
+  html += "</tbody>";
+  table.innerHTML = html;
+  container.appendChild(table);
 }
 
 // ── Strategy Comparison ─────────────────────────────────────
@@ -669,6 +928,8 @@ document.getElementById("optimize-form").addEventListener("submit", async (e) =>
       })
       .join("");
 
+    lastOptimizeResults = result.results;
+    renderHeatmap(result.results);
     toast(`优化完成: ${result.total} 种参数组合`, "success");
   } catch (err) {
     toast(err.message, "error");
