@@ -175,6 +175,115 @@ class DataStore:
         result = self._conn.execute(sql).pl()
         return result
 
+    def register_views(self) -> int:
+        """Register all Parquet files as DuckDB views for SQL querying.
+        Returns the number of views registered."""
+        if self._conn is None:
+            self._conn = duckdb.connect(self._db_path)
+        registered = 0
+        if not self._base_dir.exists():
+            return 0
+        for exchange_dir in self._base_dir.iterdir():
+            if not exchange_dir.is_dir():
+                continue
+            for symbol_dir in exchange_dir.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                for interval_dir in symbol_dir.iterdir():
+                    if not interval_dir.is_dir():
+                        continue
+                    parquet_files = list(interval_dir.glob("*.parquet"))
+                    if not parquet_files:
+                        continue
+                    view_name = f"{symbol_dir.name}_{interval_dir.name}".replace(".", "_").replace(
+                        "-", "_"
+                    )
+                    glob_path = str(interval_dir / "*.parquet").replace("\\", "/")
+                    try:
+                        self._conn.execute(
+                            f"CREATE OR REPLACE VIEW {view_name} AS "
+                            f"SELECT * FROM read_parquet('{glob_path}')"
+                        )
+                        registered += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to register view {view_name}: {e}")
+        logger.info(f"Registered {registered} DuckDB views")
+        return registered
+
+    def get_catalog(self) -> list[dict]:
+        """Get data catalog: list all stored datasets with metadata."""
+        catalog: list[dict] = []
+        if not self._base_dir.exists():
+            return catalog
+        for exchange_dir in self._base_dir.iterdir():
+            if not exchange_dir.is_dir():
+                continue
+            for symbol_dir in exchange_dir.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                for interval_dir in symbol_dir.iterdir():
+                    if not interval_dir.is_dir():
+                        continue
+                    parquet_files = list(interval_dir.glob("*.parquet"))
+                    if not parquet_files:
+                        continue
+                    total_rows = 0
+                    total_size = 0
+                    date_min: str | None = None
+                    date_max: str | None = None
+                    for pf in parquet_files:
+                        total_size += pf.stat().st_size
+                        try:
+                            df = pl.read_parquet(pf)
+                            total_rows += len(df)
+                            if "timestamp" in df.columns and len(df) > 0:
+                                ts = df["timestamp"]
+                                d_min = str(ts.min())
+                                d_max = str(ts.max())
+                                if date_min is None or d_min < date_min:
+                                    date_min = d_min
+                                if date_max is None or d_max > date_max:
+                                    date_max = d_max
+                        except Exception:
+                            pass
+                    catalog.append(
+                        {
+                            "exchange": exchange_dir.name,
+                            "symbol": symbol_dir.name,
+                            "interval": interval_dir.name,
+                            "full_id": (f"{symbol_dir.name}.{exchange_dir.name}"),
+                            "files": len(parquet_files),
+                            "rows": total_rows,
+                            "size_kb": round(total_size / 1024, 1),
+                            "date_range": (f"{date_min} ~ {date_max}" if date_min else "-"),
+                        }
+                    )
+        return sorted(catalog, key=lambda x: x["full_id"])
+
+    def query_safe(self, sql: str) -> dict:
+        """Execute SQL query with safety checks.
+        Returns dict with columns and rows."""
+        if self._conn is None:
+            self._conn = duckdb.connect(self._db_path)
+
+        sql_upper = sql.strip().upper()
+        allowed_prefixes = ("SELECT", "WITH", "SHOW", "DESCRIBE")
+        if not sql_upper.startswith(allowed_prefixes):
+            raise ValueError("Only SELECT/WITH/SHOW/DESCRIBE statements are allowed")
+
+        self.register_views()
+        if "LIMIT" not in sql_upper:
+            result = self._conn.execute(sql + " LIMIT 1000")
+        else:
+            result = self._conn.execute(sql)
+        columns = [desc[0] for desc in result.description]
+        rows = []
+        for row in result.fetchall():
+            rows.append(
+                {col: (str(val) if val is not None else None) for col, val in zip(columns, row)}
+            )
+        return {"columns": columns, "rows": rows, "row_count": len(rows)}
+
     # ------------------------------------------------------------------
     # Tick 逐笔数据存储
     # ------------------------------------------------------------------

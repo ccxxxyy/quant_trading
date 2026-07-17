@@ -187,6 +187,15 @@ function updateDashboard() {
 
 // ── Data Page ──────────────────────────────────────────────
 
+function _classifyMarket(sym) {
+  const ex = sym.split(".").pop().toUpperCase();
+  if (["NASDAQ", "NYSE", "AMEX"].includes(ex)) return "us";
+  if (["SHFE", "DCE", "CZCE", "CFFEX", "INE"].includes(ex)) return "futures";
+  return "a";
+}
+
+const _MARKET_LABELS = { a: "A 股 / 指数", us: "美股", futures: "期货" };
+
 async function loadInstruments(focusSymbol) {
   const data = await api("/data/instruments");
   const list = document.getElementById("instrument-list");
@@ -197,9 +206,18 @@ async function loadInstruments(focusSymbol) {
     return;
   }
 
-  list.innerHTML = data.instruments
-    .map((sym) => `<div class="instrument-item" data-symbol="${sym}">${sym}<span>→</span></div>`)
-    .join("");
+  const groups = { a: [], us: [], futures: [] };
+  data.instruments.forEach((sym) => groups[_classifyMarket(sym)].push(sym));
+
+  let html = "";
+  for (const [key, label] of Object.entries(_MARKET_LABELS)) {
+    if (!groups[key].length) continue;
+    html += `<div class="instrument-group-label">${label}（${groups[key].length}）</div>`;
+    html += groups[key]
+      .map((sym) => `<div class="instrument-item" data-symbol="${sym}">${sym}<span>→</span></div>`)
+      .join("");
+  }
+  list.innerHTML = html;
 
   list.querySelectorAll(".instrument-item").forEach((el) => {
     el.addEventListener("click", () => previewBars(el.dataset.symbol, el));
@@ -216,7 +234,7 @@ async function previewBars(symbol, activeEl) {
   if (activeEl) activeEl.classList.add("active");
 
   try {
-    const data = await api(`/data/bars/${encodeURIComponent(symbol)}?limit=200`);
+    const data = await api(`/data/bars/${encodeURIComponent(symbol)}`);
     if (!data.bars || data.bars.length === 0) {
       destroyChart("price-chart");
       const ctx = document.getElementById("price-chart");
@@ -698,7 +716,7 @@ document.getElementById("run-compare-btn").addEventListener("click", async () =>
   const fallbackStart = new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10);
   const start = document.querySelector('#backtest-form [name="start"]').value || fallbackStart;
   const end = document.querySelector('#backtest-form [name="end"]').value || null;
-  const capital = Number(document.querySelector('#backtest-form [name="capital"]').value) || 1000000;
+  const capital = Number(document.querySelector('#backtest-form [name="capital"]').value) || 300000;
 
   showLoading(true);
   try {
@@ -1636,7 +1654,7 @@ document.getElementById("walkforward-form").addEventListener("submit", async (e)
   params.set("symbol", btFd.get("symbol"));
   params.set("start", btFd.get("start") || new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10));
   params.set("end", btFd.get("end") || new Date().toISOString().slice(0, 10));
-  params.set("capital", btFd.get("capital") || "1000000");
+  params.set("capital", btFd.get("capital") || "300000");
   params.set("train_days", fd.get("in_sample_days"));
   params.set("test_days", fd.get("out_sample_days"));
   params.set("use_demo_data", btFd.get("use_demo_data") === "on" ? "true" : "false");
@@ -2104,6 +2122,206 @@ document.getElementById("config-reset-btn").addEventListener("click", async () =
   }
 });
 
+// ── Data Catalog & SQL Query (P2-TSDB) ─────────────────────
+
+async function loadCatalog() {
+  try {
+    const data = await api("/data/catalog");
+    const tbody = document.querySelector("#catalog-table tbody");
+    if (!data.catalog?.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">本地无数据，请先获取行情</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.catalog.map(c => `<tr>
+      <td>${c.full_id}</td>
+      <td>${c.interval}</td>
+      <td>${fmtNum(c.rows, 0)}</td>
+      <td>${c.size_kb} KB</td>
+      <td style="font-size:0.75rem">${c.date_range}</td>
+    </tr>`).join("");
+  } catch { /* silent */ }
+}
+
+document.getElementById("catalog-refresh-btn").addEventListener("click", async () => {
+  await loadCatalog();
+  toast("数据目录已刷新", "success");
+});
+
+document.getElementById("sql-run-btn").addEventListener("click", async () => {
+  const sql = document.getElementById("sql-input").value.trim();
+  if (!sql) { toast("请输入 SQL 语句", "error"); return; }
+  const statusEl = document.getElementById("sql-status");
+  statusEl.textContent = "查询中...";
+  showLoading(true);
+  try {
+    const data = await api(`/data/query?sql=${encodeURIComponent(sql)}`, { method: "POST" });
+    statusEl.textContent = `返回 ${data.row_count} 行`;
+    const thead = document.querySelector("#sql-result-table thead tr");
+    const tbody = document.querySelector("#sql-result-table tbody");
+    thead.innerHTML = (data.columns || []).map(c => `<th>${c}</th>`).join("");
+    tbody.innerHTML = (data.rows || []).map(r => {
+      return `<tr>${data.columns.map(c => `<td>${r[c] ?? ""}</td>`).join("")}</tr>`;
+    }).join("") || '<tr><td class="empty-state">无结果</td></tr>';
+    toast("SQL 查询完成", "success");
+  } catch (err) {
+    statusEl.textContent = "查询失败";
+    toast(err.message, "error");
+  } finally { showLoading(false); }
+});
+
+// ── Factor Cache (P2-FactorCache) ──────────────────────────
+
+async function loadFactorCache() {
+  try {
+    const data = await api("/alpha/cache");
+    const tbody = document.querySelector("#cache-table tbody");
+    if (!data.cached?.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无缓存</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.cached.map(c => `<tr>
+      <td>${c.symbol}</td>
+      <td>${c.interval}</td>
+      <td>${fmtNum(c.rows, 0)}</td>
+      <td>${c.factors?.length || 0}</td>
+      <td>${c.size_kb} KB</td>
+      <td><button class="btn btn-sm btn-ghost cache-del-btn" data-symbol="${c.symbol}" style="padding:2px 8px;font-size:0.7rem;color:var(--red)">删除</button></td>
+    </tr>`).join("");
+    tbody.querySelectorAll(".cache-del-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        await api(`/alpha/cache/clear?symbol=${encodeURIComponent(btn.dataset.symbol)}`, { method: "DELETE" });
+        toast(`${btn.dataset.symbol} 缓存已清除`, "success");
+        await loadFactorCache();
+      });
+    });
+  } catch { /* silent */ }
+}
+
+document.getElementById("cache-compute-btn").addEventListener("click", async () => {
+  const symbol = document.getElementById("cache-symbol").value.trim();
+  const interval = document.getElementById("cache-interval").value;
+  if (!symbol) { toast("请输入标的代码", "error"); return; }
+  showLoading(true);
+  try {
+    const data = await api(`/alpha/cache/compute?symbol=${encodeURIComponent(symbol)}&interval=${interval}`, { method: "POST" });
+    toast(`已缓存 ${data.rows} 行因子数据（${data.factors.length} 个因子）`, "success");
+    await loadFactorCache();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("cache-clear-all-btn").addEventListener("click", async () => {
+  if (!confirm("确认清除所有因子缓存？")) return;
+  try {
+    const data = await api("/alpha/cache/clear", { method: "DELETE" });
+    toast(`已清除 ${data.deleted} 个缓存`, "success");
+    await loadFactorCache();
+  } catch (err) { toast(err.message, "error"); }
+});
+
+// ── Multi-Account (P2-MultiAccount) ────────────────────────
+
+async function loadAccounts() {
+  try {
+    const data = await api("/accounts");
+    const select = document.getElementById("account-select");
+    select.innerHTML = data.accounts.map(a =>
+      `<option value="${a.name}" ${a.active ? "selected" : ""}>${a.name}${a.active ? " ★" : ""} (¥${fmtNum(a.balance, 0)})</option>`
+    ).join("");
+    const listEl = document.getElementById("account-list");
+    listEl.innerHTML = data.accounts.map(a =>
+      `<span style="padding:0.2rem 0.5rem;background:${a.active ? "var(--accent)" : "var(--bg-elevated)"};border-radius:4px;color:${a.active ? "white" : "var(--text-muted)"}">${a.name}</span>`
+    ).join("");
+  } catch { /* silent */ }
+}
+
+document.getElementById("account-create-btn").addEventListener("click", async () => {
+  const name = document.getElementById("new-account-name").value.trim();
+  const capital = document.getElementById("new-account-capital").value;
+  if (!name) { toast("请输入账户名", "error"); return; }
+  showLoading(true);
+  try {
+    await api(`/accounts/create?name=${encodeURIComponent(name)}&capital=${capital}`, { method: "POST" });
+    toast(`账户 ${name} 已创建`, "success");
+    document.getElementById("new-account-name").value = "";
+    await loadAccounts();
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("account-switch-btn").addEventListener("click", async () => {
+  const name = document.getElementById("account-select").value;
+  showLoading(true);
+  try {
+    await api(`/accounts/switch?name=${encodeURIComponent(name)}`, { method: "POST" });
+    toast(`已切换到账户 ${name}`, "success");
+    await Promise.all([loadAccounts(), refreshPaperState()]);
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+document.getElementById("account-delete-btn").addEventListener("click", async () => {
+  const name = document.getElementById("account-select").value;
+  if (name === "default") { toast("不能删除默认账户", "error"); return; }
+  if (!confirm(`确认删除账户 ${name}？`)) return;
+  showLoading(true);
+  try {
+    await api(`/accounts/delete?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+    toast(`账户 ${name} 已删除`, "success");
+    await Promise.all([loadAccounts(), refreshPaperState()]);
+  } catch (err) { toast(err.message, "error"); }
+  finally { showLoading(false); }
+});
+
+// ── Pair Analysis / Arbitrage (P2-Arbitrage) ────────────────
+
+document.getElementById("pair-scan-btn").addEventListener("click", async () => {
+  const symbols = document.getElementById("pair-symbols").value.trim();
+  if (!symbols) { toast("请输入标的列表", "error"); return; }
+  const statusEl = document.getElementById("pair-status");
+  statusEl.textContent = "扫描中...";
+  showLoading(true);
+  try {
+    const data = await api(`/arbitrage/scan?symbols=${encodeURIComponent(symbols)}`, { method: "POST" });
+    statusEl.textContent = `找到 ${data.pairs.length} 个配对`;
+
+    // Render correlation matrix
+    const matrixEl = document.getElementById("pair-corr-matrix");
+    const names = data.symbols;
+    let html = '<table class="data-table" style="font-size:0.75rem"><thead><tr><th></th>';
+    names.forEach(n => { html += `<th>${n.split(".")[0]}</th>`; });
+    html += "</tr></thead><tbody>";
+    data.corr_matrix.forEach((row, i) => {
+      html += `<tr><td><strong>${names[i].split(".")[0]}</strong></td>`;
+      row.forEach(val => {
+        const bg = val > 0.7 ? "rgba(34,197,94,0.3)" : val > 0.5 ? "rgba(234,179,8,0.2)" : val < -0.5 ? "rgba(239,68,68,0.2)" : "transparent";
+        html += `<td style="text-align:center;background:${bg}">${val.toFixed(3)}</td>`;
+      });
+      html += "</tr>";
+    });
+    html += "</tbody></table>";
+    matrixEl.innerHTML = html;
+
+    // Render pairs table
+    const tbody = document.querySelector("#pair-result-table tbody");
+    tbody.innerHTML = data.pairs.map(p => {
+      const suggClass = p.suggestion === "可配对" ? "positive" : p.suggestion === "弱" ? "" : "negative";
+      return `<tr>
+        <td>${p.a}</td><td>${p.b}</td>
+        <td>${p.correlation}</td>
+        <td>${p.coint_pvalue}</td>
+        <td>${p.hedge_ratio}</td>
+        <td class="${suggClass}">${p.suggestion}</td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="6" class="empty-state">无配对结果</td></tr>';
+
+    toast(`配对扫描完成: ${data.pairs.length} 个候选`, "success");
+  } catch (err) {
+    statusEl.textContent = "扫描失败";
+    toast(err.message, "error");
+  } finally { showLoading(false); }
+});
+
 // ── Init ───────────────────────────────────────────────────
 
 async function refreshSystemInfo() {
@@ -2156,6 +2374,9 @@ async function init() {
       loadGateways(),
       loadBlacklist(),
       loadLiquidityConfig(),
+      loadCatalog(),
+      loadFactorCache(),
+      loadAccounts(),
     ]);
     document.getElementById("system-status").textContent = "系统就绪";
   } catch (err) {
@@ -2185,6 +2406,9 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
       loadGateways(),
       loadBlacklist(),
       loadLiquidityConfig(),
+      loadCatalog(),
+      loadFactorCache(),
+      loadAccounts(),
     ]);
     toast("已刷新", "success");
   } catch (err) {
