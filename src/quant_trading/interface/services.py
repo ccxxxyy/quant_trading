@@ -212,7 +212,7 @@ def run_backtest(
     symbol: str,
     start: datetime,
     end: datetime | None = None,
-    capital: float = 1_000_000.0,
+    capital: float = 100_000.0,
     params: dict | None = None,
     use_demo_data: bool = False,
     settings: Settings | None = None,
@@ -232,12 +232,18 @@ def run_backtest(
     bars = store.load_bars(instrument_id, BarInterval.DAILY, start, end, adjust=adjust_type)
     used_demo_data = False
 
-    min_bars_for_backtest = 30
-    if len(bars) < min_bars_for_backtest and use_demo_data:
-        bars = generate_demo_bars(instrument_id, start=start, end=end)
-        used_demo_data = True
-    elif not bars:
-        raise ValueError(f"No data for {symbol}. Fetch data first or enable demo mode.")
+    min_bars_for_backtest = 60
+
+    if len(bars) < min_bars_for_backtest:
+        all_bars = store.load_bars(instrument_id, BarInterval.DAILY, adjust=adjust_type)
+        if len(all_bars) >= min_bars_for_backtest:
+            bars = all_bars[-max(min_bars_for_backtest, len(bars)) :]
+        elif use_demo_data:
+            extended_start = start - timedelta(days=int(min_bars_for_backtest * 2))
+            bars = generate_demo_bars(instrument_id, start=extended_start, end=end)
+            used_demo_data = True
+        elif not bars:
+            raise ValueError(f"No data for {symbol}. Fetch data first or enable demo mode.")
 
     engine = BacktestEngine(
         initial_capital=capital,
@@ -401,12 +407,16 @@ def get_bar_preview(
     symbol: str,
     limit: int = 0,
     settings: Settings | None = None,
+    start_str: str | None = None,
+    end_str: str | None = None,
 ) -> list[dict[str, Any]]:
     """获取K线数据用于图表展示。limit=0 表示返回全部。"""
     settings = settings or Settings.load()
     instrument_id = InstrumentId.from_str(symbol)
     store = DataStore(settings.data.parquet_dir)
-    bars = store.load_bars(instrument_id, BarInterval.DAILY)
+    start = datetime.strptime(start_str, "%Y-%m-%d") if start_str else None
+    end = datetime.strptime(end_str, "%Y-%m-%d") if end_str else None
+    bars = store.load_bars(instrument_id, BarInterval.DAILY, start=start, end=end)
     if not bars:
         return []
     if limit > 0:

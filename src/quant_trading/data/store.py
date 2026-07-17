@@ -94,6 +94,12 @@ class DataStore:
 
         ts_col = pl.col("timestamp")
         ts_dtype = df.schema.get("timestamp")
+
+        # Strip timezone from timestamp column to avoid tz-aware vs naive comparison errors
+        if isinstance(ts_dtype, pl.Datetime) and ts_dtype.time_zone is not None:
+            df = df.with_columns(ts_col.dt.replace_time_zone(None).alias("timestamp"))
+            ts_dtype = pl.Datetime("us")
+
         if ts_dtype == pl.Date:
             if start:
                 df = df.filter(
@@ -155,6 +161,11 @@ class DataStore:
 
         ts_col = pl.col("timestamp")
         ts_dtype = df.schema.get("timestamp")
+
+        if isinstance(ts_dtype, pl.Datetime) and ts_dtype.time_zone is not None:
+            df = df.with_columns(ts_col.dt.replace_time_zone(None).alias("timestamp"))
+            ts_dtype = pl.Datetime("us")
+
         if ts_dtype == pl.Date:
             if start:
                 df = df.filter(ts_col >= (start.date() if isinstance(start, datetime) else start))

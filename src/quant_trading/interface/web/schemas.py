@@ -18,7 +18,7 @@ class BacktestRequest(BaseModel):
     symbol: str
     start: str
     end: str | None = None
-    capital: float = 300_000.0
+    capital: float = 100_000.0
     params: dict | None = None
     use_demo_data: bool = False
     enable_t1: bool = False
@@ -36,7 +36,7 @@ class OptimizeRequest(BaseModel):
     symbol: str
     start: str
     end: str | None = None
-    capital: float = 300_000.0
+    capital: float = 100_000.0
     param_grid: dict[str, list]
     use_demo_data: bool = True
 
@@ -54,7 +54,7 @@ class PaperOrderRequest(BaseModel):
 
 
 class PaperConfigRequest(BaseModel):
-    initial_capital: float = 300_000.0
+    initial_capital: float = 100_000.0
     commission_rate: float = 0.0003
     slippage_rate: float = 0.0001
 
@@ -64,7 +64,7 @@ class MonteCarloRequest(BaseModel):
     symbol: str
     start: str
     end: str | None = None
-    capital: float = 300_000.0
+    capital: float = 100_000.0
     params: dict | None = None
     use_demo_data: bool = True
     num_simulations: int = 100
