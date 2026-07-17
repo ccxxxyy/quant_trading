@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import polars as pl
 
@@ -134,3 +135,78 @@ class FeatureEngine:
     @property
     def factor_names(self) -> list[str]:
         return list(self._factors.keys())
+
+    def cache_features(self, symbol: str, interval: str, df: pl.DataFrame) -> int:
+        """Cache computed features to Parquet file. Returns rows cached."""
+        cache_dir = Path("data/factors") / symbol / interval
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        filepath = cache_dir / "features.parquet"
+        df.write_parquet(filepath)
+        logger.info(f"Cached {len(df)} rows of features to {filepath}")
+        return len(df)
+
+    def load_cached_features(self, symbol: str, interval: str) -> pl.DataFrame | None:
+        """Load cached features. Returns None if no cache exists."""
+        filepath = Path("data/factors") / symbol / interval / "features.parquet"
+        if filepath.exists():
+            return pl.read_parquet(filepath)
+        return None
+
+    def list_cached(self) -> list[dict]:
+        """List all cached factor files with metadata."""
+        cache_root = Path("data/factors")
+        if not cache_root.exists():
+            return []
+        result = []
+        for symbol_dir in sorted(cache_root.iterdir()):
+            if not symbol_dir.is_dir():
+                continue
+            for interval_dir in sorted(symbol_dir.iterdir()):
+                if not interval_dir.is_dir():
+                    continue
+                fp = interval_dir / "features.parquet"
+                if fp.exists():
+                    try:
+                        df = pl.read_parquet(fp)
+                        ohlcv = (
+                            "timestamp",
+                            "open",
+                            "high",
+                            "low",
+                            "close",
+                            "volume",
+                            "turnover",
+                        )
+                        result.append(
+                            {
+                                "symbol": symbol_dir.name,
+                                "interval": interval_dir.name,
+                                "rows": len(df),
+                                "columns": len(df.columns),
+                                "factors": [c for c in df.columns if c not in ohlcv],
+                                "size_kb": round(fp.stat().st_size / 1024, 1),
+                            }
+                        )
+                    except Exception:
+                        pass
+        return result
+
+    def clear_cache(self, symbol: str | None = None) -> int:
+        """Clear cached factor files. Returns files deleted."""
+        import shutil
+
+        cache_root = Path("data/factors")
+        if not cache_root.exists():
+            return 0
+        deleted = 0
+        if symbol:
+            target = cache_root / symbol
+            if target.exists():
+                shutil.rmtree(target)
+                deleted = 1
+        else:
+            for d in list(cache_root.iterdir()):
+                if d.is_dir():
+                    shutil.rmtree(d)
+                    deleted += 1
+        return deleted

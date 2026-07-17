@@ -399,17 +399,18 @@ def list_instruments(settings: Settings | None = None) -> list[str]:
 
 def get_bar_preview(
     symbol: str,
-    limit: int = 100,
+    limit: int = 0,
     settings: Settings | None = None,
 ) -> list[dict[str, Any]]:
-    """获取最近的K线数据用于图表展示。"""
+    """获取K线数据用于图表展示。limit=0 表示返回全部。"""
     settings = settings or Settings.load()
     instrument_id = InstrumentId.from_str(symbol)
     store = DataStore(settings.data.parquet_dir)
     bars = store.load_bars(instrument_id, BarInterval.DAILY)
     if not bars:
         return []
-    bars = bars[-limit:]
+    if limit > 0:
+        bars = bars[-limit:]
     return [
         {
             "timestamp": b.timestamp.isoformat(),

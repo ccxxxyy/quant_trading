@@ -19,6 +19,13 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Transparent scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
+
 body {
   font-family: var(--font);
   background: var(--bg-base);
@@ -397,6 +404,17 @@ body::before {
   flex-direction: column;
   gap: 0.25rem;
 }
+
+.instrument-group-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 0.35rem 0.3rem 0.15rem;
+  margin-top: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.03em;
+}
+.instrument-group-label:first-child { margin-top: 0; }
 
 .instrument-item {
   padding: 0.4rem 0.55rem;

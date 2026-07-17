@@ -51,26 +51,29 @@ app.add_middleware(
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# ── Paper trading gateway singleton ────────────────────────
-_paper_gateway: Any = None
+# ── Multi-account paper gateway management ─────────────────
+_paper_gateways: dict[str, Any] = {}
+_active_account: str = "default"
 
 
 def _get_paper_gateway(
-    capital: float = 1_000_000.0,
+    capital: float = 300_000.0,
     commission: float = 0.0003,
     slippage: float = 0.0001,
     reset: bool = False,
+    account_name: str | None = None,
 ) -> Any:
-    global _paper_gateway
-    if _paper_gateway is None or reset:
+    global _active_account
+    name = account_name or _active_account
+    if name not in _paper_gateways or reset:
         from quant_trading.gateway.paper import PaperTradingGateway
 
-        _paper_gateway = PaperTradingGateway(
+        _paper_gateways[name] = PaperTradingGateway(
             initial_capital=capital,
             commission_rate=commission,
             slippage_rate=slippage,
         )
-    return _paper_gateway
+    return _paper_gateways[name]
 
 
 # ── Static pages ───────────────────────────────────────────
@@ -111,6 +114,135 @@ async def strategies():
     }
 
 
+@app.post("/api/arbitrage/scan")
+async def arbitrage_scan(symbols: str = "600519.SSE,000858.SSE"):
+    """扫描标的配对：相关性矩阵 + 协整检验 + 对冲比估计。"""
+    import numpy as np
+
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+    from quant_trading.interface.services import generate_demo_bars
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.market import BarInterval
+
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if len(sym_list) < 2:
+        raise HTTPException(status_code=400, detail="至少需要 2 个标的")
+
+    settings = Settings.load()
+    store = DataStore(settings.data.parquet_dir)
+
+    close_data: dict[str, list[float]] = {}
+    for sym in sym_list:
+        iid = InstrumentId.from_str(sym)
+        bars = store.load_bars(iid, BarInterval.DAILY)
+        if not bars:
+            bars = generate_demo_bars(iid, count=120)
+        close_data[sym] = [float(b.close) for b in bars]
+
+    min_len = min(len(v) for v in close_data.values())
+    if min_len < 20:
+        raise HTTPException(status_code=400, detail="数据不足，需至少 20 根 K 线")
+
+    trimmed = {k: v[-min_len:] for k, v in close_data.items()}
+
+    names = list(trimmed.keys())
+    n = len(names)
+    corr_matrix: list[list[float]] = []
+    for i in range(n):
+        row = []
+        for j in range(n):
+            a = np.array(trimmed[names[i]])
+            b = np.array(trimmed[names[j]])
+            corr = float(np.corrcoef(a, b)[0, 1])
+            row.append(round(corr, 4))
+        corr_matrix.append(row)
+
+    pairs = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            a = np.array(trimmed[names[i]])
+            b = np.array(trimmed[names[j]])
+            corr_val = corr_matrix[i][j]
+
+            hedge_ratio = float(np.polyfit(b, a, 1)[0])
+            spread = a - hedge_ratio * b
+            spread_mean = float(np.mean(spread))
+            spread_std = float(np.std(spread))
+
+            adf_stat = _simple_adf(spread)
+            p_value = _adf_pvalue(adf_stat, len(spread))
+
+            suggestion = (
+                "可配对"
+                if (abs(corr_val) > 0.7 and p_value < 0.1)
+                else "弱"
+                if abs(corr_val) > 0.5
+                else "不建议"
+            )
+
+            pairs.append(
+                {
+                    "a": names[i],
+                    "b": names[j],
+                    "correlation": round(corr_val, 4),
+                    "coint_pvalue": round(p_value, 4),
+                    "hedge_ratio": round(hedge_ratio, 4),
+                    "spread_mean": round(spread_mean, 2),
+                    "spread_std": round(spread_std, 2),
+                    "suggestion": suggestion,
+                }
+            )
+
+    pairs.sort(key=lambda x: x["coint_pvalue"])
+
+    return {
+        "symbols": names,
+        "corr_matrix": corr_matrix,
+        "pairs": pairs,
+    }
+
+
+def _simple_adf(series) -> float:
+    """Simplified ADF test statistic (Dickey-Fuller)."""
+    import numpy as np
+
+    y = np.array(series)
+    dy = np.diff(y)
+    y_lag = y[:-1]
+    n = len(dy)
+    if n < 5:
+        return 0.0
+    x = np.column_stack([y_lag, np.ones(n)])
+    beta = np.linalg.lstsq(x, dy, rcond=None)[0]
+    residuals = dy - x @ beta
+    se = np.sqrt(np.sum(residuals**2) / (n - 2))
+    se_beta = se / np.sqrt(np.sum((y_lag - y_lag.mean()) ** 2))
+    if se_beta == 0:
+        return 0.0
+    return float(beta[0] / se_beta)
+
+
+def _adf_pvalue(stat: float, nobs: int) -> float:
+    """Approximate ADF p-value from test statistic."""
+    if stat < -3.96:
+        return 0.01
+    elif stat < -3.41:
+        return 0.05
+    elif stat < -3.13:
+        return 0.10
+    elif stat < -2.86:
+        return 0.15
+    elif stat < -2.57:
+        return 0.20
+    elif stat < -1.94:
+        return 0.35
+    elif stat < -1.62:
+        return 0.50
+    else:
+        return 0.80
+
+
 @app.get("/api/data/instruments")
 async def data_instruments():
     instruments = list_instruments()
@@ -118,7 +250,7 @@ async def data_instruments():
 
 
 @app.get("/api/data/bars/{symbol}")
-async def data_bars(symbol: str, limit: int = 200):
+async def data_bars(symbol: str, limit: int = 0):
     try:
         bars = get_bar_preview(symbol, limit=limit)
     except ValueError as e:
@@ -146,6 +278,35 @@ async def data_fetch(req: FetchDataRequest):
             status_code=503,
             detail=f"Data provider not installed: {e}. Run: uv sync --extra data",
         ) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/data/catalog")
+async def data_catalog():
+    """获取数据目录：所有已存储数据集的元数据。"""
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+
+    settings = Settings.load()
+    store = DataStore(settings.data.parquet_dir)
+    catalog = store.get_catalog()
+    return {"catalog": catalog, "count": len(catalog)}
+
+
+@app.post("/api/data/query")
+async def data_query(sql: str = "SELECT 1 AS test"):
+    """执行 SQL 查询（只读，仅 SELECT/WITH/SHOW）。"""
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+
+    settings = Settings.load()
+    store = DataStore(settings.data.parquet_dir)
+    try:
+        result = store.query_safe(sql)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -540,6 +701,84 @@ async def monitor_push_config(
         return {"status": "ok", "channel": "email", "recipients": rcpt_list}
 
     raise HTTPException(status_code=400, detail=f"Unknown channel: {channel}")
+
+
+# ── Multi-Account APIs ─────────────────────────────────────
+
+
+@app.get("/api/accounts")
+async def accounts_list():
+    """列出所有模拟盘账户。"""
+    result = []
+    for name, gw in _paper_gateways.items():
+        account = await gw.query_account()
+        result.append(
+            {
+                "name": name,
+                "active": name == _active_account,
+                "balance": float(account.balance),
+                "available": float(account.available),
+            }
+        )
+    if not result:
+        gw = _get_paper_gateway()
+        await gw.connect()
+        account = await gw.query_account()
+        result.append(
+            {
+                "name": _active_account,
+                "active": True,
+                "balance": float(account.balance),
+                "available": float(account.available),
+            }
+        )
+    return {"accounts": result, "active": _active_account}
+
+
+@app.post("/api/accounts/create")
+async def accounts_create(
+    name: str = "sub1",
+    capital: float = 300_000.0,
+):
+    """创建新的模拟盘账户。"""
+    global _active_account
+    if name in _paper_gateways:
+        raise HTTPException(status_code=400, detail=f"账户 {name} 已存在")
+    gw = _get_paper_gateway(capital=capital, account_name=name)
+    await gw.connect()
+    return {"status": "created", "name": name}
+
+
+@app.post("/api/accounts/switch")
+async def accounts_switch(name: str = "default"):
+    """切换活跃账户。"""
+    global _active_account
+    if name not in _paper_gateways:
+        raise HTTPException(status_code=400, detail=f"账户 {name} 不存在")
+    _active_account = name
+    gw = _paper_gateways[name]
+    if not gw.is_connected:
+        await gw.connect()
+    account = await gw.query_account()
+    return {
+        "status": "switched",
+        "active": name,
+        "account": _serialize_account(account),
+    }
+
+
+@app.delete("/api/accounts/delete")
+async def accounts_delete(name: str):
+    """删除模拟盘账户。"""
+    global _active_account
+    if name == "default":
+        raise HTTPException(status_code=400, detail="不能删除默认账户")
+    if name not in _paper_gateways:
+        raise HTTPException(status_code=400, detail=f"账户 {name} 不存在")
+    del _paper_gateways[name]
+    if _active_account == name:
+        _active_account = "default"
+    return {"status": "deleted", "name": name}
 
 
 # ── Paper Trading APIs ─────────────────────────────────────
@@ -954,6 +1193,79 @@ async def alpha_models():
     }
 
 
+@app.get("/api/alpha/cache")
+async def alpha_cache_list():
+    """列出所有已缓存的因子数据。"""
+    from quant_trading.alpha.feature import FeatureEngine
+
+    engine = FeatureEngine()
+    cached = engine.list_cached()
+    return {"cached": cached, "count": len(cached)}
+
+
+@app.post("/api/alpha/cache/compute")
+async def alpha_cache_compute(symbol: str = "DEMO.SSE", interval: str = "1d"):
+    """计算并缓存指定标的的因子数据。"""
+    import polars as pl
+
+    from quant_trading.alpha.feature import FeatureEngine
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+    from quant_trading.interface.services import generate_demo_bars
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.market import BarInterval
+
+    instrument_id = InstrumentId.from_str(symbol)
+    settings = Settings.load()
+    store = DataStore(settings.data.parquet_dir)
+
+    interval_map = {
+        "1d": BarInterval.DAILY,
+        "1h": BarInterval.HOUR_1,
+        "5m": BarInterval.MINUTE_5,
+        "1m": BarInterval.MINUTE_1,
+    }
+    bar_interval = interval_map.get(interval, BarInterval.DAILY)
+    bars = store.load_bars(instrument_id, bar_interval)
+
+    if not bars:
+        bars = generate_demo_bars(instrument_id, count=120)
+
+    df = pl.DataFrame(
+        {
+            "timestamp": [b.timestamp for b in bars],
+            "open": [float(b.open) for b in bars],
+            "high": [float(b.high) for b in bars],
+            "low": [float(b.low) for b in bars],
+            "close": [float(b.close) for b in bars],
+            "volume": [b.volume for b in bars],
+        }
+    )
+
+    engine = FeatureEngine()
+    engine.register_defaults()
+    result_df = engine.compute_features(df)
+    cached = engine.cache_features(symbol, interval, result_df)
+
+    return {
+        "status": "cached",
+        "symbol": symbol,
+        "interval": interval,
+        "rows": cached,
+        "factors": engine.factor_names,
+    }
+
+
+@app.delete("/api/alpha/cache/clear")
+async def alpha_cache_clear(symbol: str | None = None):
+    """清除因子缓存。"""
+    from quant_trading.alpha.feature import FeatureEngine
+
+    engine = FeatureEngine()
+    deleted = engine.clear_cache(symbol)
+    return {"status": "cleared", "deleted": deleted}
+
+
 # ── Live Strategy Runner APIs ──────────────────────────────
 
 _live_runner: Any = None
@@ -1200,7 +1512,7 @@ async def walkforward_run(
     end: str = "2024-01-01",
     train_days: int = 180,
     test_days: int = 30,
-    capital: float = 1_000_000.0,
+    capital: float = 300_000.0,
     use_demo_data: bool = True,
 ):
     """运行 Walk-Forward 滚动验证。"""
@@ -1410,7 +1722,10 @@ async def gateway_list():
             "name": "paper",
             "display": "模拟盘网关",
             "status": (
-                "connected" if _paper_gateway and _paper_gateway._connected else "disconnected"
+                "connected"
+                if _paper_gateways.get(_active_account)
+                and _paper_gateways[_active_account]._connected
+                else "disconnected"
             ),
             "type": "paper",
         },

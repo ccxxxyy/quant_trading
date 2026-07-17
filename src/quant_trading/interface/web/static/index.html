@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=8" />
+  <link rel="stylesheet" href="/static/css/style.css?v=11" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -179,6 +179,38 @@
           <div class="panel-header"><h3>K 线预览</h3></div>
           <div class="chart-wrap tall"><canvas id="price-chart"></canvas></div>
         </div>
+        <!-- 数据目录 + SQL 查询 -->
+        <div class="split-layout">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>数据目录</h3>
+              <button class="btn btn-sm btn-ghost" id="catalog-refresh-btn">刷新</button>
+            </div>
+            <div class="table-wrap" style="max-height:260px;overflow-y:auto">
+              <table class="data-table" id="catalog-table">
+                <thead><tr><th>标的</th><th>周期</th><th>行数</th><th>大小</th><th>日期范围</th></tr></thead>
+                <tbody><tr><td colspan="5" class="empty-state">加载中...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h3>SQL 查询</h3></div>
+            <div class="form" style="gap:0.35rem">
+              <textarea id="sql-input" rows="3" placeholder="SELECT * FROM 标的名_1d LIMIT 10"
+                style="width:100%;padding:0.4rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:0.8rem;resize:vertical"></textarea>
+              <div style="display:flex;gap:0.5rem">
+                <button class="btn btn-sm btn-primary" id="sql-run-btn">执行查询</button>
+                <span id="sql-status" style="font-size:0.75rem;color:var(--text-muted);line-height:2"></span>
+              </div>
+              <div class="table-wrap" style="max-height:220px;overflow-y:auto">
+                <table class="data-table" id="sql-result-table">
+                  <thead><tr></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Backtest -->
@@ -208,7 +240,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="1000000" min="1" step="1" placeholder="可输入任意金额，如 500" />
+                <input type="number" name="capital" value="300000" min="1" step="1" placeholder="可输入任意金额，如 500" />
               </div>
               <div id="strategy-params" class="strategy-params"></div>
               <div class="form-row two-col">
@@ -432,7 +464,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="1000000" min="1" step="1" />
+                <input type="number" name="capital" value="300000" min="1" step="1" />
               </div>
               <div id="opt-param-grid" class="strategy-params">
                 <p style="font-size:0.8rem;color:var(--text-muted)">选择策略后自动生成参数搜索范围</p>
@@ -558,6 +590,25 @@
 
       <!-- Paper Trading -->
       <section class="page" id="page-paper">
+        <!-- 多账户管理 -->
+        <div class="panel" style="margin-bottom:0.6rem">
+          <div class="panel-header">
+            <h3>多账户管理</h3>
+            <div style="display:flex;gap:0.5rem;align-items:center">
+              <select id="account-select" style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;min-width:120px">
+                <option value="default">默认账户</option>
+              </select>
+              <button class="btn btn-sm btn-primary" id="account-switch-btn">切换</button>
+              <input type="text" id="new-account-name" placeholder="新账户名"
+                     style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;width:100px" />
+              <input type="number" id="new-account-capital" value="300000" min="1" step="1" placeholder="初始资金"
+                     style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;width:100px" />
+              <button class="btn btn-sm btn-ghost" id="account-create-btn">创建</button>
+              <button class="btn btn-sm btn-ghost" id="account-delete-btn" style="color:var(--red)">删除</button>
+            </div>
+          </div>
+          <div id="account-list" style="display:flex;gap:0.5rem;flex-wrap:wrap;font-size:0.8rem;color:var(--text-muted)"></div>
+        </div>
         <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
           <div class="kpi-card"><div class="kpi-label">总资产</div><div class="kpi-value" id="paper-balance">-</div></div>
           <div class="kpi-card"><div class="kpi-label">可用资金</div><div class="kpi-value" id="paper-available">-</div></div>
@@ -1095,11 +1146,63 @@
             </table>
           </div>
         </div>
+        <!-- 因子缓存管理 -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>因子缓存管理</h3>
+            <div style="display:flex;gap:0.5rem;align-items:center">
+              <input type="text" id="cache-symbol" value="DEMO.SSE" placeholder="标的代码"
+                     style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;font-family:var(--mono);width:120px" />
+              <select id="cache-interval" style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem">
+                <option value="1d">日线</option><option value="1h">小时</option><option value="5m">5分钟</option>
+              </select>
+              <button class="btn btn-sm btn-primary" id="cache-compute-btn">计算并缓存</button>
+              <button class="btn btn-sm btn-ghost" id="cache-clear-all-btn">清除全部</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="cache-table">
+              <thead><tr><th>标的</th><th>周期</th><th>行数</th><th>因子数</th><th>大小</th><th>操作</th></tr></thead>
+              <tbody><tr><td colspan="6" class="empty-state">暂无缓存</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- Strategies -->
       <section class="page" id="page-strategies">
         <div class="strategy-cards" id="strategy-cards"></div>
+        <!-- 配对分析 -->
+        <div class="panel" style="margin-top:0.6rem">
+          <div class="panel-header"><h3>配对交易分析工具</h3></div>
+          <div class="form" style="gap:0.35rem">
+            <div class="form-row two-col">
+              <div>
+                <label>标的列表（逗号分隔）</label>
+                <input type="text" id="pair-symbols" value="600519.SSE,000858.SSE,000568.SSE,600809.SSE" placeholder="600519.SSE,000858.SSE" />
+              </div>
+              <div style="display:flex;align-items:flex-end;gap:0.5rem">
+                <button class="btn btn-sm btn-primary" id="pair-scan-btn">扫描配对</button>
+                <span id="pair-status" style="font-size:0.75rem;color:var(--text-muted)"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="split-layout" style="margin-top:0.6rem">
+          <div class="panel">
+            <div class="panel-header"><h3>相关性矩阵</h3></div>
+            <div id="pair-corr-matrix" class="empty-state">点击「扫描配对」生成</div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h3>推荐配对</h3></div>
+            <div class="table-wrap">
+              <table class="data-table" id="pair-result-table">
+                <thead><tr><th>A 腿</th><th>B 腿</th><th>相关系数</th><th>协整 p-value</th><th>对冲比</th><th>建议</th></tr></thead>
+                <tbody><tr><td colspan="6" class="empty-state">等待扫描</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Ops Center -->
@@ -1246,6 +1349,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=7"></script>
+  <script src="/static/js/app.js?v=11"></script>
 </body>
 </html>

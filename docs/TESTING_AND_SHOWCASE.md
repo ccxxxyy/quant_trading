@@ -6,6 +6,147 @@
 
 ---
 
+## 验证方法操作指南（先看这里）
+
+测试清单中有 6 种不同的验证方法格式，以下是每种格式的含义和操作方式：
+
+> **前提**：所有终端命令都需要先 `cd D:\PythonProjects\quant_trading`
+
+### 1. `pytest test_xxx::test_yyy` — 自动化测试
+
+**含义**：自动化单元测试，机器自动运行并检查结果。
+
+**操作**：一键运行全部 55 个，不需要逐个执行：
+
+```powershell
+uv run pytest tests/ -v
+```
+
+看到 `55 passed` = 全部通过。覆盖 C-01~C-11、M-01~M-11、D-01~D-06、B-01~B-16、S-01~S-09、R-01~R-12。
+
+### 2. `ClassName.method()` — Python 代码调用
+
+**含义**：需要用 Python 执行的代码片段。
+
+**操作**：在终端用 `uv run python -c "代码"` 执行。常用示例（直接复制粘贴）：
+
+```powershell
+# C-07 模拟时钟推进
+uv run python -c "from quant_trading.core.clock import SimulatedClock; c=SimulatedClock(); c.advance_seconds(60); print(f'推进后: {c.now()}')"
+
+# C-08 实盘时钟
+uv run python -c "from quant_trading.core.clock import LiveClock; print(f'当前时间: {LiveClock().now()}')"
+
+# C-09 YAML配置加载
+uv run python -c "from quant_trading.core.config import Settings; s=Settings.load(); print(f'初始资金: {s.backtest.initial_capital}')"
+
+# C-10 默认配置
+uv run python -c "from quant_trading.core.config import Settings; print(f'默认资金: {Settings().backtest.initial_capital}')"
+
+# G-01 模拟网关
+uv run python -c "from quant_trading.gateway.simulated import SimulatedGateway; print(f'网关: {SimulatedGateway().name}')"
+
+# A-01 因子引擎
+uv run python -c "from quant_trading.alpha.feature import FeatureEngine; e=FeatureEngine(); e.register_defaults(); print(f'因子: {list(e._registry.keys())}')"
+
+# R-10 TWAP拆单
+uv run python -c "from quant_trading.execution.algorithm import TWAPAlgorithm; t=TWAPAlgorithm(1000,slices=5); print(f'拆单: {t.child_orders}')"
+```
+
+### 3. `quant xxx` — 命令行工具（CLI）
+
+**含义**：项目自带的命令行工具，运行时前面加 `uv run`。
+
+**操作**：
+
+```powershell
+# L-01 系统信息
+uv run quant info
+
+# L-02 双均线回测（用演示数据）
+uv run quant backtest dual_ma --symbol DEMO.SSE --start 2024-01-01
+
+# L-04 自定义资金
+uv run quant backtest dual_ma --symbol DEMO.SSE --start 2024-01-01 --capital 50000
+
+# L-06 查看本地数据
+uv run quant data list
+
+# D-07 下载A股数据
+uv run quant data fetch 600519.SSE --start 2024-01-01
+
+# D-08 下载美股数据
+uv run quant data fetch AAPL.NASDAQ --start 2024-01-01 --provider yfinance
+```
+
+### 4. `GET /api/xxx` — 查看数据的网页接口
+
+**含义**：只读接口，获取数据不修改任何东西。
+
+**操作**：先启动 Web（`.\start_web.ps1`），然后在浏览器地址栏输入完整 URL 回车：
+
+```
+http://127.0.0.1:8888/api/health         ← W-01 健康检查
+http://127.0.0.1:8888/api/system/info    ← W-02 系统信息
+http://127.0.0.1:8888/api/strategies     ← W-03 策略列表
+http://127.0.0.1:8888/api/risk/daily-report  ← W-23 风控日报
+http://127.0.0.1:8888/api/data/catalog   ← W-31 数据目录
+```
+
+看到 JSON 格式的数据 = 接口正常。
+
+### 5. `POST /api/xxx` — 执行操作的网页接口
+
+**含义**：提交数据/执行操作的接口，不能直接在浏览器输入 URL。
+
+**操作**：在 Web 界面（http://127.0.0.1:8888）点按钮。每个 POST 接口都对应一个按钮：
+
+| POST 接口 | 对应按钮 | 所在页面 |
+|-----------|---------|---------|
+| `POST /api/backtest/run` | 点「运行回测」 | 回测实验室 |
+| `POST /api/backtest/compare` | 点「策略对比」 | 回测实验室 |
+| `POST /api/backtest/optimize` | 点「开始优化」 | 参数优化 |
+| `POST /api/backtest/montecarlo` | 点「蒙特卡洛压力测试」 | 回测实验室 |
+| `POST /api/data/fetch` | 点「获取并存储」 | 数据管理 |
+| `POST /api/paper/order` | 点「下单」 | 模拟盘 |
+| `POST /api/risk/blacklist/add` | 点「添加黑名单」 | 风控中心 |
+| `POST /api/config/update` | 点「保存配置」 | 系统设置 |
+| `POST /api/accounts/create` | 点「创建账户」 | 模拟盘 |
+| `POST /api/arbitrage/scan` | 点「开始扫描」 | 策略库 |
+
+### 6. 中文描述 — Web 界面操作
+
+**含义**：清单里用中文描述的项（如「选策略 → 运行」），都是在 Web 界面里用鼠标操作。
+
+**操作**：启动 Web → 浏览器打开 http://127.0.0.1:8888 → 按描述操作：
+
+| 清单里写的 | 你实际要做的 |
+|-----------|------------|
+| 浏览器访问首页 | 打开 http://127.0.0.1:8888 |
+| 点击KPI卡片 | 在总览页点击 4 个数字方块 |
+| 选策略 → 运行 | 回测页下拉选策略 → 点「运行回测」 |
+| 回测页勾选T+1+前复权 | 勾选 T+1 复选框 + 复权下拉选前复权 |
+| 回测后点击压力测试 | 先运行一次回测，然后点「蒙特卡洛」按钮 |
+| 风控页冻结+清仓 | 进风控中心 → 点「冻结账户」→ 点「一键清仓」 |
+| 模拟盘页买入100股 | 填标的代码 → 方向选买 → 数量填100 → 点「下单」 |
+| 设置页编辑配置→保存 | 进系统设置 → 修改参数 → 点「保存」 |
+
+### 最快验证路径
+
+```powershell
+# 第一步：自动化测试（覆盖约 60 项，2 分钟）
+cd D:\PythonProjects\quant_trading
+uv run pytest tests/ -v
+uv run ruff check src/ tests/
+uv run ruff format --check src/
+
+# 第二步：启动 Web，手动操作验证 W-01~W-40（10 分钟）
+.\start_web.ps1
+# 浏览器打开 http://127.0.0.1:8888，逐页操作
+```
+
+---
+
 ## 第一部分：功能测试清单
 
 ### 一、核心框架层
@@ -515,6 +656,25 @@
 | W-125 | 风控日报 API | `GET /api/risk/daily-report` | 返回 account/risk_status/positions/consecutive_loss |
 | W-126 | 黑名单 API | `GET /api/risk/blacklist` → `POST /api/risk/blacklist/add?symbol=X` | 黑名单列表包含 X |
 | W-127 | 配置 API | `GET /api/config` → `POST /api/config/update?section=risk&key=max_position_pct&value=0.3` | settings.yaml 更新 |
+| W-128 | 数据目录 | `GET /api/data/catalog` | 返回 catalog 列表含 symbol/interval/rows/size_kb |
+| W-129 | SQL 查询 | `POST /api/data/query?sql=SELECT 1 AS test` | 返回 columns/rows/row_count |
+| W-130 | SQL 只读限制 | `POST /api/data/query?sql=DROP TABLE x` | 400 错误：Only SELECT allowed |
+| W-131 | 因子缓存 - 计算 | `POST /api/alpha/cache/compute?symbol=DEMO.SSE&interval=1d` | 返回 rows>0, factors 非空 |
+| W-132 | 因子缓存 - 列表 | `GET /api/alpha/cache` | 返回 cached 列表含 symbol/interval/rows |
+| W-133 | 因子缓存 - 清除 | `DELETE /api/alpha/cache/clear?symbol=DEMO.SSE` | deleted=1 |
+| W-134 | 因子缓存 - 全清 | `DELETE /api/alpha/cache/clear` | deleted>=0 |
+| W-135 | 多账户 - 列表 | `GET /api/accounts` | 返回 accounts 含 default 账户 |
+| W-136 | 多账户 - 创建 | `POST /api/accounts/create?name=test1&capital=500000` | status=created |
+| W-137 | 多账户 - 切换 | `POST /api/accounts/switch?name=test1` | active=test1 |
+| W-138 | 多账户 - 删除 | `DELETE /api/accounts/delete?name=test1` | status=deleted |
+| W-139 | 多账户 - 默认不可删 | `DELETE /api/accounts/delete?name=default` | 400 不能删除默认账户 |
+| W-140 | 配对扫描 | `POST /api/arbitrage/scan?symbols=600519.SSE,000858.SSE` | 返回 corr_matrix + pairs |
+| W-141 | 配对扫描 - 至少2标的 | `POST /api/arbitrage/scan?symbols=600519.SSE` | 400 至少需要2个标的 |
+| W-142 | 数据目录 Web | 数据管理页 → 数据目录面板显示表格 | 展示标的/周期/行数/大小/日期范围 |
+| W-143 | SQL 查询 Web | 数据管理页 → SQL 输入框 → 执行查询 | 结果表格展示查询结果 |
+| W-144 | 因子缓存 Web | AI 实验室 → 因子缓存管理面板 → 计算并缓存 | 缓存列表更新显示新条目 |
+| W-145 | 多账户 Web | 模拟盘 → 多账户管理面板 → 创建/切换/删除 | 账户列表和 KPI 相应更新 |
+| W-146 | 配对分析 Web | 策略库 → 配对交易分析工具 → 扫描配对 | 相关性矩阵和推荐配对表展示 |
 
 ---
 
@@ -1004,6 +1164,65 @@ uv run pytest tests/ -v --tb=short
 
 ---
 
+### 展示二十二：数据目录 & SQL 查询
+
+**展示位置**：Web 数据管理页 → 数据目录 + SQL 查询面板
+
+**操作步骤**：
+1. 数据目录表格自动展示所有本地数据集（标的/周期/行数/大小/日期范围）
+2. 在 SQL 查询框输入：`SELECT * FROM 600519_1d LIMIT 5`
+3. 点击「执行查询」→ 结果表格展示查询结果
+4. 输入非法语句（如 `DROP TABLE x`）→ 400 错误提示只允许 SELECT
+
+**展示效果**：DuckDB 自动注册 Parquet 视图，可用标准 SQL 直接分析本地 K 线数据。
+
+---
+
+### 展示二十三：因子缓存管理
+
+**展示位置**：Web AI 实验室 → 因子缓存管理面板
+
+**操作步骤**：
+1. 输入标的 `DEMO.SSE`，选择周期「日线」
+2. 点击「计算并缓存」→ toast 提示已缓存行数和因子数
+3. 缓存列表更新显示新条目（标的/周期/行数/因子数/大小）
+4. 点击「删除」按钮清除单个缓存
+5. 点击「清除全部」清空所有缓存
+
+**展示效果**：因子数据持久化到 Parquet，避免重复计算，加速 ML 训练流程。
+
+---
+
+### 展示二十四：多账户管理
+
+**展示位置**：Web 模拟盘 → 多账户管理面板
+
+**操作步骤**：
+1. 输入账户名 `策略A`，初始资金 `500000`，点击「创建」
+2. 再创建一个 `策略B`，初始资金 `200000`
+3. 下拉选择 `策略A` → 点击「切换」→ 下方 KPI 显示 50 万余额
+4. 在 `策略A` 下单后，切换回「默认账户」→ 持仓为空（账户隔离）
+5. 选中 `策略B` → 点击「删除」→ 账户被移除
+
+**展示效果**：多账户独立隔离，每个策略可使用独立资金和持仓进行模拟交易。
+
+---
+
+### 展示二十五：配对交易分析
+
+**展示位置**：Web 策略库 → 配对交易分析工具
+
+**操作步骤**：
+1. 输入：`600519.SSE,000858.SSE,000568.SSE,600809.SSE`
+2. 点击「扫描配对」
+3. 左侧展示颜色编码的相关性矩阵（绿=高正相关，红=负相关）
+4. 右侧推荐配对表列出所有两两组合的相关系数、协整 p-value、对冲比
+5. 「建议」列显示「可配对」/「弱」/「不建议」
+
+**展示效果**：自动扫描标的间的统计关系，推荐可配对交易的组合及最优对冲比率。
+
+---
+
 ### 功能总览数字
 
 | 维度 | 数量 |
@@ -1015,11 +1234,11 @@ uv run pytest tests/ -v --tb=short
 | 绩效指标 | 10 项（收益率、年化、夏普、最大回撤、Calmar、胜率、盈亏比等） |
 | 风控检查 | 4 重事前检查 + 紧急冻结/清仓/策略暂停 + 黑名单 + 流动性过滤 + 连续亏损暂停 |
 | 执行算法 | 2 种（TWAP、VWAP） |
-| AI 因子 | 4 类 7 个（动量×3、波动率×2、RSI、量比） |
-| Web API | 44 个端点 |
+| AI 因子 | 4 类 7 个（动量×3、波动率×2、RSI、量比）+ 持久化缓存 |
+| Web API | 55 个端点 |
 | Web 页面 | 12 个（总览、数据、回测、参数优化、监控告警、模拟盘、风控中心、实时策略、AI实验室、策略库、运维中心、设置） |
 | CLI 命令 | 4 个（info、data fetch、data list、backtest） |
 | 单元测试 | 55 个用例 |
-| 功能测试项 | 127 项 Web 测试 + 95+ 项全系统测试 |
-| 展示场景 | 23 个（含 A 股增强、紧急风控、Monte Carlo、复盘报表、热力图、黑名单、流动性过滤、配置管理） |
+| 功能测试项 | 146 项 Web 测试 + 95+ 项全系统测试 |
+| 展示场景 | 27 个（含 A 股增强、紧急风控、Monte Carlo、复盘报表、热力图、黑名单、流动性过滤、配置管理、数据目录、因子缓存、多账户、配对分析） |
 | CI 矩阵 | 4 种环境（2 OS × 2 Python） |
