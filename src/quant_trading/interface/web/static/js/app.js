@@ -814,18 +814,8 @@ function useStrategy(id) {
 
 function renderSettings() {
   if (!systemInfo) return;
-
-  const riskEl = document.getElementById("risk-settings");
-  riskEl.innerHTML = Object.entries(systemInfo.risk)
-    .map(([k, v]) => `<div class="setting-item"><div class="key">${k}</div><div class="val">${v}</div></div>`)
-    .join("");
-
-  const btEl = document.getElementById("backtest-settings");
-  btEl.innerHTML = Object.entries(systemInfo.backtest_defaults)
-    .map(([k, v]) => `<div class="setting-item"><div class="key">${k}</div><div class="val">${v}</div></div>`)
-    .join("");
-
   document.getElementById("system-info-block").textContent = JSON.stringify(systemInfo, null, 2);
+  loadConfigEditor();
 }
 
 // ── Parameter Optimization ──────────────────────────────────
@@ -1855,6 +1845,265 @@ document.getElementById("add-process-form").addEventListener("submit", async (e)
   finally { showLoading(false); }
 });
 
+// ── Blacklist Management (P2-7) ─────────────────────────────
+
+async function loadBlacklist() {
+  try {
+    const data = await api("/risk/blacklist");
+    const container = document.getElementById("blacklist-list");
+    if (!data.blacklist.length) {
+      container.innerHTML = '<div class="empty-state">黑名单为空</div>';
+      return;
+    }
+    container.innerHTML = data.blacklist
+      .map(
+        (s) =>
+          `<div class="instrument-item" style="margin-bottom:0.2rem">
+            <span>${s}</span>
+            <button class="btn btn-sm btn-danger-outline blacklist-rm-btn" data-symbol="${s}">移除</button>
+          </div>`,
+      )
+      .join("");
+    container.querySelectorAll(".blacklist-rm-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        await api(`/risk/blacklist/remove?symbol=${encodeURIComponent(btn.dataset.symbol)}`, { method: "POST" });
+        toast(`${btn.dataset.symbol} 已从黑名单移除`, "success");
+        await loadBlacklist();
+      });
+    });
+  } catch {
+    /* silent */
+  }
+}
+
+document.getElementById("blacklist-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const symbol = fd.get("symbol").trim();
+  if (!symbol) return;
+  try {
+    await api(`/risk/blacklist/add?symbol=${encodeURIComponent(symbol)}`, { method: "POST" });
+    toast(`${symbol} 已加入黑名单`, "success");
+    e.target.reset();
+    await loadBlacklist();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+// ── Liquidity Filter (P2-7) ─────────────────────────────────
+
+async function loadLiquidityConfig() {
+  try {
+    const data = await api("/risk/liquidity");
+    const form = document.getElementById("liquidity-form");
+    form.querySelector('[name="min_volume"]').value = data.min_volume;
+    form.querySelector('[name="min_turnover"]').value = data.min_turnover;
+    form.querySelector('[name="enabled"]').checked = data.enabled;
+    const statusEl = document.getElementById("liquidity-status");
+    statusEl.textContent = data.enabled
+      ? `已启用 — 最低量 ${data.min_volume.toLocaleString()} 股 / 最低额 ¥${data.min_turnover.toLocaleString()}`
+      : "已关闭";
+  } catch {
+    /* silent */
+  }
+}
+
+document.getElementById("liquidity-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const params = new URLSearchParams();
+  params.set("min_volume", fd.get("min_volume"));
+  params.set("min_turnover", fd.get("min_turnover"));
+  params.set("enabled", fd.has("enabled") ? "true" : "false");
+  try {
+    await api(`/risk/liquidity/update?${params}`, { method: "POST" });
+    toast("流动性过滤设置已保存", "success");
+    await loadLiquidityConfig();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+// ── Daily Report & Consecutive Loss (P2-8) ──────────────────
+
+document.getElementById("daily-report-btn").addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    const data = await api("/risk/daily-report");
+    document.getElementById("daily-report-empty").style.display = "none";
+    document.getElementById("daily-report-content").style.display = "block";
+
+    document.getElementById("dr-balance").textContent = fmtNum(data.account.balance, 0);
+    const pnlEl = document.getElementById("dr-daily-pnl");
+    pnlEl.textContent = fmtNum(data.order_summary.daily_pnl, 2);
+    setMetricColor(pnlEl, data.order_summary.daily_pnl);
+    document.getElementById("dr-orders").textContent = data.order_summary.total_orders;
+    document.getElementById("dr-positions").textContent = data.positions.length;
+
+    document.getElementById("dr-consec-current").textContent = data.consecutive_loss.current_streak;
+    document.getElementById("dr-consec-max").textContent = data.consecutive_loss.max_streak;
+    document.getElementById("dr-consec-threshold").textContent = data.consecutive_loss.pause_threshold;
+    document.getElementById("consec-loss-threshold").value = data.consecutive_loss.pause_threshold;
+
+    const alertEl = document.getElementById("dr-pause-alert");
+    alertEl.style.display = data.consecutive_loss.should_pause ? "block" : "none";
+
+    const tbody = document.querySelector("#dr-history-table tbody");
+    if (data.order_history.length) {
+      tbody.innerHTML = data.order_history
+        .reverse()
+        .map((h) => {
+          const pnlClass = (h.pnl || 0) >= 0 ? "positive" : "negative";
+          return `<tr>
+            <td>${h.time ? h.time.slice(0, 19) : "-"}</td>
+            <td>${h.symbol || "-"}</td>
+            <td>${h.side || "-"}</td>
+            <td class="${pnlClass}">${fmtNum(h.pnl, 2)}</td>
+          </tr>`;
+        })
+        .join("");
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无交易记录</td></tr>';
+    }
+    toast("日报已生成", "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
+document.getElementById("consec-loss-save-btn").addEventListener("click", async () => {
+  const val = document.getElementById("consec-loss-threshold").value;
+  try {
+    await api(`/risk/consecutive-loss-config?threshold=${val}`, { method: "POST" });
+    toast(`连续亏损阈值已设为 ${val}`, "success");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+document.getElementById("consec-loss-check-btn").addEventListener("click", async () => {
+  try {
+    const data = await api("/risk/consecutive-loss-check", { method: "POST" });
+    if (data.triggered) {
+      toast(`连续亏损 ${data.consecutive_losses} 笔，策略已暂停！`, "error");
+    } else {
+      toast(`当前连续亏损 ${data.consecutive_losses} 笔，未达阈值 ${data.threshold}`, "info");
+    }
+    await loadRiskStatus();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+// ── Config Management (P2-10) ───────────────────────────────
+
+const CONFIG_LABELS = {
+  system: {
+    _title: "系统配置",
+    name: "系统名称",
+    log_level: "日志级别",
+    timezone: "时区",
+    data_dir: "数据目录",
+  },
+  data: {
+    _title: "数据配置",
+    default_store: "存储引擎",
+    parquet_dir: "Parquet 目录",
+    duckdb_path: "DuckDB 路径",
+  },
+  risk: {
+    _title: "风控配置",
+    max_position_pct: "单标的持仓上限",
+    max_single_order_pct: "单笔下单上限",
+    max_daily_loss_pct: "日亏损上限",
+    max_order_frequency: "下单频率上限(次/时)",
+  },
+  backtest: {
+    _title: "回测配置",
+    default_commission: "默认佣金率",
+    default_slippage: "默认滑点率",
+    initial_capital: "默认初始资金",
+  },
+};
+
+let _configCache = null;
+
+async function loadConfigEditor() {
+  try {
+    const data = await api("/config");
+    _configCache = data;
+    const editor = document.getElementById("config-editor");
+    let html = "";
+    for (const [section, fields] of Object.entries(CONFIG_LABELS)) {
+      const sectionData = data[section] || {};
+      html += `<div style="margin-bottom:0.5rem">
+        <h4 style="font-size:0.85rem;margin-bottom:0.35rem;color:var(--accent)">${fields._title}</h4>
+        <div class="settings-grid">`;
+      for (const [key, label] of Object.entries(fields)) {
+        if (key === "_title") continue;
+        const val = sectionData[key] ?? "";
+        html += `<div class="setting-item">
+          <div class="key">${label}</div>
+          <input type="text" class="config-input" data-section="${section}" data-key="${key}"
+            value="${val}"
+            style="width:100%;padding:0.25rem 0.4rem;margin-top:0.15rem;background:var(--bg-base);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:0.8rem" />
+        </div>`;
+      }
+      html += "</div></div>";
+    }
+    editor.innerHTML = html;
+  } catch {
+    /* silent */
+  }
+}
+
+document.getElementById("config-save-all-btn").addEventListener("click", async () => {
+  const inputs = document.querySelectorAll(".config-input");
+  let saved = 0;
+  let errors = [];
+  showLoading(true);
+  for (const input of inputs) {
+    const section = input.dataset.section;
+    const key = input.dataset.key;
+    const origVal = _configCache?.[section]?.[key];
+    const newVal = input.value;
+    if (String(origVal) === newVal) continue;
+    try {
+      const params = new URLSearchParams({ section, key, value: newVal });
+      await api(`/config/update?${params}`, { method: "POST" });
+      saved++;
+    } catch (err) {
+      errors.push(`${section}.${key}: ${err.message}`);
+    }
+  }
+  showLoading(false);
+  if (errors.length) {
+    toast(`保存出错: ${errors.join("; ")}`, "error");
+  } else if (saved > 0) {
+    toast(`已保存 ${saved} 项配置`, "success");
+    await loadConfigEditor();
+  } else {
+    toast("无修改", "info");
+  }
+});
+
+document.getElementById("config-reset-btn").addEventListener("click", async () => {
+  if (!confirm("确认恢复所有配置到默认值？")) return;
+  showLoading(true);
+  try {
+    await api("/config/reset", { method: "POST" });
+    toast("配置已恢复默认值", "success");
+    await loadConfigEditor();
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
 // ── Init ───────────────────────────────────────────────────
 
 async function refreshSystemInfo() {
@@ -1905,6 +2154,8 @@ async function init() {
       loadAIModels(),
       loadOpsStatus(),
       loadGateways(),
+      loadBlacklist(),
+      loadLiquidityConfig(),
     ]);
     document.getElementById("system-status").textContent = "系统就绪";
   } catch (err) {
@@ -1932,6 +2183,8 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
       loadAIModels(),
       loadOpsStatus(),
       loadGateways(),
+      loadBlacklist(),
+      loadLiquidityConfig(),
     ]);
     toast("已刷新", "success");
   } catch (err) {

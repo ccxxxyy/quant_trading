@@ -1476,6 +1476,241 @@ async def live_active_orders():
     return {"orders": orders, "count": len(orders)}
 
 
+# ── Risk Daily Report + Consecutive Loss Pause (P2-8) ─────
+
+
+@app.get("/api/risk/daily-report")
+async def risk_daily_report():
+    """生成当日风控日报：当日盈亏、订单统计、风控触发记录、连续亏损检测。"""
+    engine = _get_risk_engine()
+    status = engine.get_status()
+
+    gw = _get_paper_gateway()
+    if not gw.is_connected:
+        await gw.connect()
+    account = await gw.query_account()
+    positions = await gw.query_positions()
+
+    pos_list = []
+    for p in positions:
+        if p.is_flat:
+            continue
+        pos_list.append(
+            {
+                "instrument_id": str(p.instrument_id),
+                "quantity": p.quantity,
+                "avg_cost": float(p.avg_cost),
+                "realized_pnl": float(p.realized_pnl),
+                "side": "long" if p.quantity > 0 else "short",
+            }
+        )
+
+    history = engine.get_order_history()
+
+    consecutive_losses = 0
+    max_consecutive_losses = 0
+    for rec in history:
+        if rec.get("pnl", 0) < 0:
+            consecutive_losses += 1
+            max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
+        else:
+            consecutive_losses = 0
+
+    pause_threshold = engine.get_consecutive_loss_limit()
+    should_pause = consecutive_losses >= pause_threshold and pause_threshold > 0
+
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "account": {
+            "balance": float(account.balance),
+            "available": float(account.available),
+            "equity": float(account.equity if hasattr(account, "equity") else account.balance),
+        },
+        "risk_status": status,
+        "positions": pos_list,
+        "order_summary": {
+            "total_orders": status["daily_order_count"],
+            "daily_pnl": status["daily_pnl"],
+        },
+        "consecutive_loss": {
+            "current_streak": consecutive_losses,
+            "max_streak": max_consecutive_losses,
+            "pause_threshold": pause_threshold,
+            "should_pause": should_pause,
+            "is_paused": status["strategies_halted"],
+        },
+        "order_history": history[-20:],
+    }
+
+
+@app.post("/api/risk/consecutive-loss-config")
+async def risk_consecutive_loss_config(threshold: int = 3):
+    """设置连续亏损暂停阈值。"""
+    engine = _get_risk_engine()
+    engine.set_consecutive_loss_limit(threshold)
+    return {"status": "updated", "threshold": threshold}
+
+
+@app.post("/api/risk/consecutive-loss-check")
+async def risk_consecutive_loss_check():
+    """手动触发连续亏损检测，超过阈值时自动暂停策略。"""
+    engine = _get_risk_engine()
+    history = engine.get_order_history()
+    consecutive = 0
+    for rec in reversed(history):
+        if rec.get("pnl", 0) < 0:
+            consecutive += 1
+        else:
+            break
+
+    threshold = engine.get_consecutive_loss_limit()
+    triggered = consecutive >= threshold and threshold > 0
+    if triggered and not engine.strategies_halted:
+        engine.halt_strategies()
+
+    return {
+        "consecutive_losses": consecutive,
+        "threshold": threshold,
+        "triggered": triggered,
+        "strategies_halted": engine.strategies_halted,
+    }
+
+
+# ── Blacklist & Liquidity Filter (P2-7) ──────────────────
+
+
+@app.get("/api/risk/blacklist")
+async def risk_blacklist():
+    """获取当前黑名单。"""
+    engine = _get_risk_engine()
+    return {
+        "blacklist": list(engine.get_blacklist()),
+        "count": len(engine.get_blacklist()),
+    }
+
+
+@app.post("/api/risk/blacklist/add")
+async def risk_blacklist_add(symbol: str):
+    """添加标的到黑名单。"""
+    engine = _get_risk_engine()
+    engine.add_to_blacklist(symbol)
+    return {"status": "added", "symbol": symbol, "blacklist": list(engine.get_blacklist())}
+
+
+@app.post("/api/risk/blacklist/remove")
+async def risk_blacklist_remove(symbol: str):
+    """从黑名单移除标的。"""
+    engine = _get_risk_engine()
+    engine.remove_from_blacklist(symbol)
+    return {"status": "removed", "symbol": symbol, "blacklist": list(engine.get_blacklist())}
+
+
+@app.get("/api/risk/liquidity")
+async def risk_liquidity_config():
+    """获取流动性过滤配置。"""
+    engine = _get_risk_engine()
+    return engine.get_liquidity_config()
+
+
+@app.post("/api/risk/liquidity/update")
+async def risk_liquidity_update(
+    min_volume: int = 10000,
+    min_turnover: float = 1_000_000.0,
+    enabled: bool = True,
+):
+    """更新流动性过滤阈值。"""
+    engine = _get_risk_engine()
+    engine.set_liquidity_config(
+        min_volume=min_volume,
+        min_turnover=min_turnover,
+        enabled=enabled,
+    )
+    return {"status": "updated", **engine.get_liquidity_config()}
+
+
+# ── Config Management (P2-10) ────────────────────────────
+
+
+@app.get("/api/config")
+async def config_get():
+    """获取完整配置。"""
+    from quant_trading.core.config import Settings
+
+    settings = Settings.load()
+    return settings.model_dump()
+
+
+@app.post("/api/config/update")
+async def config_update(
+    section: str,
+    key: str,
+    value: str,
+):
+    """更新配置项并持久化到 settings.yaml。"""
+    import yaml
+
+    from quant_trading.core.config import Settings
+
+    config_path = Path("config") / "settings.yaml"
+
+    if config_path.exists():
+        with open(config_path) as f:
+            raw = yaml.safe_load(f) or {}
+    else:
+        raw = {}
+
+    if section not in raw:
+        raw[section] = {}
+
+    try:
+        if "." in value:
+            parsed = float(value)
+        else:
+            parsed = int(value)
+    except ValueError:
+        parsed = value
+
+    raw[section][key] = parsed
+
+    try:
+        Settings(**raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid config: {e}") from e
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w") as f:
+        yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+
+    if section == "risk":
+        re = _get_risk_engine()
+        if key == "max_position_pct":
+            re._max_position_pct = Decimal(str(parsed))
+        elif key == "max_single_order_pct":
+            re._max_single_order_pct = Decimal(str(parsed))
+        elif key == "max_daily_loss_pct":
+            re._max_daily_loss_pct = Decimal(str(parsed))
+        elif key == "max_order_frequency":
+            re._max_order_frequency = int(parsed)
+
+    return {"status": "saved", "section": section, "key": key, "value": parsed}
+
+
+@app.post("/api/config/reset")
+async def config_reset():
+    """重置配置到默认值。"""
+    import yaml
+
+    from quant_trading.core.config import Settings
+
+    defaults = Settings()
+    raw = defaults.model_dump()
+    config_path = Path("config") / "settings.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w") as f:
+        yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+    return {"status": "reset", "config": raw}
+
+
 # ── Entrypoint ─────────────────────────────────────────────
 
 
