@@ -209,10 +209,14 @@ async function loadInstruments(focusSymbol) {
   const groups = { a: [], us: [], futures: [] };
   data.instruments.forEach((sym) => groups[_classifyMarket(sym)].push(sym));
 
+  const _HINTS = { a: "600519.SSE", us: "AAPL.NASDAQ", futures: "au2412.SHFE" };
   let html = "";
   for (const [key, label] of Object.entries(_MARKET_LABELS)) {
-    if (!groups[key].length) continue;
     html += `<div class="instrument-group-label">${label}（${groups[key].length}）</div>`;
+    if (!groups[key].length) {
+      html += `<div class="empty-state" style="font-size:0.7rem;padding:0.25rem 0.4rem">暂无，试试获取 ${_HINTS[key]}</div>`;
+      continue;
+    }
     html += groups[key]
       .map((sym) => `<div class="instrument-item" data-symbol="${sym}">${sym}<span>→</span></div>`)
       .join("");
@@ -229,12 +233,17 @@ async function loadInstruments(focusSymbol) {
   previewBars(target);
 }
 
-async function previewBars(symbol, activeEl) {
+async function previewBars(symbol, activeEl, startDate, endDate) {
   document.querySelectorAll(".instrument-item").forEach((el) => el.classList.remove("active"));
   if (activeEl) activeEl.classList.add("active");
 
   try {
-    const data = await api(`/data/bars/${encodeURIComponent(symbol)}`);
+    let url = `/data/bars/${encodeURIComponent(symbol)}`;
+    const qp = [];
+    if (startDate) qp.push(`start=${startDate}`);
+    if (endDate) qp.push(`end=${endDate}`);
+    if (qp.length) url += `?${qp.join("&")}`;
+    const data = await api(url);
     if (!data.bars || data.bars.length === 0) {
       destroyChart("price-chart");
       const ctx = document.getElementById("price-chart");
@@ -261,14 +270,16 @@ async function previewBars(symbol, activeEl) {
 document.getElementById("fetch-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
+  const fetchStart = fd.get("start");
+  const fetchEnd = fd.get("end") || null;
   showLoading(true);
   try {
     const result = await api("/data/fetch", {
       method: "POST",
       body: JSON.stringify({
         symbol: fd.get("symbol"),
-        start: fd.get("start"),
-        end: fd.get("end") || null,
+        start: fetchStart,
+        end: fetchEnd,
         interval: fd.get("interval"),
         provider: fd.get("provider"),
       }),
@@ -280,6 +291,7 @@ document.getElementById("fetch-form").addEventListener("submit", async (e) => {
       toast(`成功获取 ${count} 条 K 线: ${result.symbol}`, "success");
     }
     await loadInstruments(result.symbol);
+    previewBars(result.symbol, null, fetchStart, fetchEnd);
     await refreshSystemInfo();
   } catch (err) {
     toast(err.message, "error");
@@ -451,8 +463,8 @@ function renderDrawdownChart(equityCurve) {
       datasets: [{
         label: "回撤 %",
         data: drawdowns,
-        borderColor: "#ef4444",
-        backgroundColor: "rgba(239, 68, 68, 0.12)",
+        borderColor: "#22c55e",
+        backgroundColor: "rgba(34, 197, 94, 0.12)",
         fill: true,
         tension: 0.3,
         pointRadius: 0,
@@ -493,8 +505,8 @@ function renderKlineWithTrades(equityCurve, trades) {
       labels,
       datasets: [
         { label: "权益", data: prices, borderColor: "#3b82f6", borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false },
-        { label: "买入 ▲", data: buyPoints, borderColor: "#22c55e", backgroundColor: "#22c55e", pointRadius: 7, pointStyle: "triangle", showLine: false },
-        { label: "卖出 ▼", data: sellPoints, borderColor: "#ef4444", backgroundColor: "#ef4444", pointRadius: 7, pointStyle: "triangle", rotation: 180, showLine: false },
+        { label: "买入 ▲", data: buyPoints, borderColor: "#ef4444", backgroundColor: "#ef4444", pointRadius: 7, pointStyle: "triangle", showLine: false },
+        { label: "卖出 ▼", data: sellPoints, borderColor: "#22c55e", backgroundColor: "#22c55e", pointRadius: 7, pointStyle: "triangle", rotation: 180, showLine: false },
       ],
     },
     options: { ...chartOptions("权益 + 买卖点"), plugins: { ...chartOptions("").plugins, legend: { display: true, labels: { color: "#94a3b8", font: { size: 11 } } } } },
@@ -552,9 +564,9 @@ function renderMCPercentileChart(curves) {
     data: {
       labels,
       datasets: [
-        { label: "95% 最优路径", data: curves.p95, borderColor: "#22c55e", borderWidth: 1.2, pointRadius: 0, tension: 0.3, fill: false },
+        { label: "95% 最优路径", data: curves.p95, borderColor: "#ef4444", borderWidth: 1.2, pointRadius: 0, tension: 0.3, fill: false },
         { label: "50% 中位路径", data: curves.p50, borderColor: "#3b82f6", borderWidth: 2, pointRadius: 0, tension: 0.3, fill: false },
-        { label: "5% 最差路径", data: curves.p5, borderColor: "#ef4444", borderWidth: 1.2, pointRadius: 0, tension: 0.3, fill: false },
+        { label: "5% 最差路径", data: curves.p5, borderColor: "#22c55e", borderWidth: 1.2, pointRadius: 0, tension: 0.3, fill: false },
       ],
     },
     options: { ...chartOptions("Monte Carlo 权益分布带"), plugins: { legend: { display: true, labels: { color: "#94a3b8", font: { size: 11 } } } } },
@@ -627,8 +639,8 @@ function renderReviewMonthlyChart(monthly) {
       datasets: [{
         label: "月度盈亏",
         data: monthly.map(m => m.pnl),
-        backgroundColor: monthly.map(m => m.pnl >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)"),
-        borderColor: monthly.map(m => m.pnl >= 0 ? "#22c55e" : "#ef4444"),
+        backgroundColor: monthly.map(m => m.pnl >= 0 ? "rgba(239,68,68,0.7)" : "rgba(34,197,94,0.7)"),
+        borderColor: monthly.map(m => m.pnl >= 0 ? "#ef4444" : "#22c55e"),
         borderWidth: 1,
       }],
     },
@@ -716,7 +728,7 @@ document.getElementById("run-compare-btn").addEventListener("click", async () =>
   const fallbackStart = new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10);
   const start = document.querySelector('#backtest-form [name="start"]').value || fallbackStart;
   const end = document.querySelector('#backtest-form [name="end"]').value || null;
-  const capital = Number(document.querySelector('#backtest-form [name="capital"]').value) || 300000;
+  const capital = Number(document.querySelector('#backtest-form [name="capital"]').value) || 100000;
 
   showLoading(true);
   try {
@@ -1654,7 +1666,7 @@ document.getElementById("walkforward-form").addEventListener("submit", async (e)
   params.set("symbol", btFd.get("symbol"));
   params.set("start", btFd.get("start") || new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10));
   params.set("end", btFd.get("end") || new Date().toISOString().slice(0, 10));
-  params.set("capital", btFd.get("capital") || "300000");
+  params.set("capital", btFd.get("capital") || "100000");
   params.set("train_days", fd.get("in_sample_days"));
   params.set("test_days", fd.get("out_sample_days"));
   params.set("use_demo_data", btFd.get("use_demo_data") === "on" ? "true" : "false");

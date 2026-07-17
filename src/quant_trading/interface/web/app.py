@@ -57,7 +57,7 @@ _active_account: str = "default"
 
 
 def _get_paper_gateway(
-    capital: float = 300_000.0,
+    capital: float = 100_000.0,
     commission: float = 0.0003,
     slippage: float = 0.0001,
     reset: bool = False,
@@ -250,9 +250,9 @@ async def data_instruments():
 
 
 @app.get("/api/data/bars/{symbol}")
-async def data_bars(symbol: str, limit: int = 0):
+async def data_bars(symbol: str, limit: int = 0, start: str | None = None, end: str | None = None):
     try:
-        bars = get_bar_preview(symbol, limit=limit)
+        bars = get_bar_preview(symbol, limit=limit, start_str=start, end_str=end)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"symbol": symbol, "bars": bars, "count": len(bars)}
@@ -738,7 +738,7 @@ async def accounts_list():
 @app.post("/api/accounts/create")
 async def accounts_create(
     name: str = "sub1",
-    capital: float = 300_000.0,
+    capital: float = 100_000.0,
 ):
     """创建新的模拟盘账户。"""
     global _active_account
@@ -1512,7 +1512,7 @@ async def walkforward_run(
     end: str = "2024-01-01",
     train_days: int = 180,
     test_days: int = 30,
-    capital: float = 300_000.0,
+    capital: float = 100_000.0,
     use_demo_data: bool = True,
 ):
     """运行 Walk-Forward 滚动验证。"""

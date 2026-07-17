@@ -18,4 +18,4 @@ risk:
 backtest:
   default_commission: 0.0003
   default_slippage: 0.0001
-  initial_capital: 1000000.0
+  initial_capital: 100000.0

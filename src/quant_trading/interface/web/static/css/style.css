@@ -10,6 +10,8 @@
   --accent-glow: rgba(59, 130, 246, 0.25);
   --green: #22c55e;
   --red: #ef4444;
+  --up: #ef4444;
+  --down: #22c55e;
   --amber: #f59e0b;
   --radius: 8px;
   --sidebar-w: 210px;
@@ -360,8 +362,8 @@ body::before {
 
 .metric-label { display: block; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.15rem; }
 .metric-val { font-family: var(--mono); font-size: 0.95rem; font-weight: 600; }
-.metric-val.positive { color: var(--green); }
-.metric-val.negative { color: var(--red); }
+.metric-val.positive { color: var(--up); }
+.metric-val.negative { color: var(--down); }
 
 /* Charts */
 .chart-wrap { position: relative; height: 200px; }
@@ -574,8 +576,8 @@ body::before {
   background: linear-gradient(135deg, var(--bg-panel), rgba(59, 130, 246, 0.03));
 }
 
-.positive { color: var(--green); }
-.negative { color: var(--red); }
+.positive { color: var(--up); }
+.negative { color: var(--down); }
 
 /* Alert level badges */
 .alert-badge {

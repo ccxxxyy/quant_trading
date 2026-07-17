@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=11" />
+  <link rel="stylesheet" href="/static/css/style.css?v=12" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -240,7 +240,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="300000" min="1" step="1" placeholder="可输入任意金额，如 500" />
+                <input type="number" name="capital" value="100000" min="1" step="1" placeholder="可输入任意金额，如 500" />
               </div>
               <div id="strategy-params" class="strategy-params"></div>
               <div class="form-row two-col">
@@ -464,7 +464,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="300000" min="1" step="1" />
+                <input type="number" name="capital" value="100000" min="1" step="1" />
               </div>
               <div id="opt-param-grid" class="strategy-params">
                 <p style="font-size:0.8rem;color:var(--text-muted)">选择策略后自动生成参数搜索范围</p>
@@ -601,7 +601,7 @@
               <button class="btn btn-sm btn-primary" id="account-switch-btn">切换</button>
               <input type="text" id="new-account-name" placeholder="新账户名"
                      style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;width:100px" />
-              <input type="number" id="new-account-capital" value="300000" min="1" step="1" placeholder="初始资金"
+              <input type="number" id="new-account-capital" value="100000" min="1" step="1" placeholder="初始资金"
                      style="padding:0.3rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;width:100px" />
               <button class="btn btn-sm btn-ghost" id="account-create-btn">创建</button>
               <button class="btn btn-sm btn-ghost" id="account-delete-btn" style="color:var(--red)">删除</button>
@@ -1349,6 +1349,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=11"></script>
+  <script src="/static/js/app.js?v=13"></script>
 </body>
 </html>
