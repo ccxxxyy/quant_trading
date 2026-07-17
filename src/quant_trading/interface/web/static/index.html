@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=5" />
+  <link rel="stylesheet" href="/static/css/style.css?v=8" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -208,7 +208,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="1000000" min="1000" step="1" placeholder="可输入任意金额，如 100000" />
+                <input type="number" name="capital" value="1000000" min="1" step="1" placeholder="可输入任意金额，如 500" />
               </div>
               <div id="strategy-params" class="strategy-params"></div>
               <div class="form-row two-col">
@@ -432,7 +432,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="1000000" min="1000" step="1" />
+                <input type="number" name="capital" value="1000000" min="1" step="1" />
               </div>
               <div id="opt-param-grid" class="strategy-params">
                 <p style="font-size:0.8rem;color:var(--text-muted)">选择策略后自动生成参数搜索范围</p>
@@ -838,7 +838,7 @@
             <h3>事前四重风控规则</h3>
             <button class="btn btn-sm btn-ghost" id="risk-rules-refresh-btn">刷新</button>
           </div>
-          <p class="panel-text" style="margin-bottom:0.5rem;font-size:0.85rem">每笔订单提交前需通过以下四道检查；可在线调整阈值，实时生效。</p>
+          <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">每笔订单提交前需通过以下四道检查；可在线调整阈值，实时生效。</p>
           <div class="table-wrap">
             <table class="data-table" id="risk-rules-table">
               <thead>
@@ -847,7 +847,93 @@
               <tbody></tbody>
             </table>
           </div>
-          <div id="risk-rules-status" style="margin-top:0.75rem;font-size:0.8rem;color:var(--text-muted)"></div>
+          <div id="risk-rules-status" style="margin-top:0.35rem;font-size:0.8rem;color:var(--text-muted)"></div>
+        </div>
+
+        <!-- 黑名单管理 P2-7 -->
+        <div class="panel-grid">
+          <div class="panel">
+            <div class="panel-header"><h3>标的黑名单</h3></div>
+            <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">黑名单中的标的在事前检查时会被自动拒绝下单，防止误操作高风险品种。</p>
+            <form id="blacklist-form" class="form">
+              <div class="form-row" style="display:flex;gap:0.5rem;align-items:flex-end">
+                <div style="flex:1">
+                  <label>标的代码</label>
+                  <input type="text" name="symbol" placeholder="如 600519.SSE" required />
+                </div>
+                <button type="submit" class="btn btn-danger btn-sm">加入黑名单</button>
+              </div>
+            </form>
+            <div id="blacklist-list" style="margin-top:0.35rem">
+              <div class="empty-state">黑名单为空</div>
+            </div>
+          </div>
+
+          <!-- 流动性过滤 P2-7 -->
+          <div class="panel">
+            <div class="panel-header"><h3>流动性过滤</h3></div>
+            <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">过滤成交量或成交额不足的标的，避免流动性风险导致无法成交或价格异常。</p>
+            <form id="liquidity-form" class="form">
+              <div class="form-row two-col">
+                <div>
+                  <label>最低成交量（股）</label>
+                  <input type="number" name="min_volume" value="10000" min="0" step="1000" />
+                </div>
+                <div>
+                  <label>最低成交额（元）</label>
+                  <input type="number" name="min_turnover" value="1000000" min="0" step="100000" />
+                </div>
+              </div>
+              <label class="checkbox-label">
+                <input type="checkbox" name="enabled" checked />
+                启用流动性过滤
+              </label>
+              <button type="submit" class="btn btn-primary btn-block">保存设置</button>
+            </form>
+            <div id="liquidity-status" style="margin-top:0.35rem;font-size:0.8rem;color:var(--text-muted)"></div>
+          </div>
+        </div>
+
+        <!-- 事后风控日报 + 连续亏损暂停 P2-8 -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>风控日报 & 连续亏损暂停</h3>
+            <button class="btn btn-sm btn-primary" id="daily-report-btn">生成日报</button>
+          </div>
+          <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">汇总当日盈亏、持仓、订单记录；连续亏损超过阈值时自动暂停策略。</p>
+          <div class="form" style="margin-bottom:0.5rem">
+            <div class="form-row" style="display:flex;gap:0.5rem;align-items:flex-end">
+              <div style="flex:1">
+                <label>连续亏损暂停阈值（笔）</label>
+                <input type="number" id="consec-loss-threshold" value="3" min="0" max="20" step="1" />
+              </div>
+              <button class="btn btn-warning btn-sm" id="consec-loss-save-btn">保存阈值</button>
+              <button class="btn btn-ghost btn-sm" id="consec-loss-check-btn">手动检测</button>
+            </div>
+          </div>
+          <div id="daily-report-content" style="display:none">
+            <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:0.5rem">
+              <div class="kpi-card"><div class="kpi-label">账户余额</div><div class="kpi-value" id="dr-balance">-</div></div>
+              <div class="kpi-card"><div class="kpi-label">当日盈亏</div><div class="kpi-value" id="dr-daily-pnl">-</div></div>
+              <div class="kpi-card"><div class="kpi-label">当日下单数</div><div class="kpi-value" id="dr-orders">-</div></div>
+              <div class="kpi-card"><div class="kpi-label">持仓标的数</div><div class="kpi-value" id="dr-positions">-</div></div>
+            </div>
+            <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:0.5rem">
+              <div class="kpi-card"><div class="kpi-label">当前连亏</div><div class="kpi-value negative" id="dr-consec-current">-</div></div>
+              <div class="kpi-card"><div class="kpi-label">历史最大连亏</div><div class="kpi-value negative" id="dr-consec-max">-</div></div>
+              <div class="kpi-card"><div class="kpi-label">暂停阈值</div><div class="kpi-value" id="dr-consec-threshold">-</div></div>
+            </div>
+            <div id="dr-pause-alert" style="display:none;padding:0.5rem;background:rgba(239,68,68,0.1);border:1px solid var(--red);border-radius:6px;margin-bottom:0.5rem;font-size:0.8rem;color:var(--red)">
+              ⚠ 连续亏损达到阈值，策略已自动暂停！
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="dr-history-table">
+                <thead><tr><th>时间</th><th>标的</th><th>方向</th><th>盈亏</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div id="daily-report-empty" class="empty-state">点击「生成日报」查看当日风控报告</div>
         </div>
       </section>
 
@@ -1135,12 +1221,16 @@
       <!-- Settings -->
       <section class="page" id="page-settings">
         <div class="panel">
-          <div class="panel-header"><h3>风控参数</h3></div>
-          <div class="settings-grid" id="risk-settings"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-header"><h3>回测默认参数</h3></div>
-          <div class="settings-grid" id="backtest-settings"></div>
+          <div class="panel-header">
+            <h3>可视化配置管理</h3>
+            <div>
+              <button class="btn btn-sm btn-primary" id="config-save-all-btn">保存全部修改</button>
+              <button class="btn btn-sm btn-danger-outline" id="config-reset-btn" style="margin-left:0.35rem">恢复默认</button>
+            </div>
+          </div>
+          <p class="panel-text" style="margin-bottom:0.5rem;font-size:0.8rem">在线编辑配置并持久化到 config/settings.yaml，修改实时生效。</p>
+          <div id="config-editor"></div>
+          <div id="config-status" style="margin-top:0.35rem;font-size:0.8rem;color:var(--text-muted)"></div>
         </div>
         <div class="panel">
           <div class="panel-header"><h3>系统信息</h3></div>
@@ -1156,6 +1246,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=5"></script>
+  <script src="/static/js/app.js?v=7"></script>
 </body>
 </html>

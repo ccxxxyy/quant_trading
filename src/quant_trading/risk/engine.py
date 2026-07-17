@@ -64,6 +64,18 @@ class RiskEngine:
         self._frozen = False  # 紧急冻结标志
         self._strategies_halted = False  # 策略暂停标志
 
+        # 订单历史（事后风控用）
+        self._order_history: list[dict] = []
+        self._consecutive_loss_limit: int = 3  # 连续亏损暂停阈值
+
+        # 黑名单
+        self._blacklist: set[str] = set()
+
+        # 流动性过滤
+        self._liquidity_enabled: bool = False
+        self._min_volume: int = 10000
+        self._min_turnover: float = 1_000_000.0
+
     @property
     def enabled(self) -> bool:
         return self._enabled
@@ -198,6 +210,80 @@ class RiskEngine:
                 )
         return orders
 
+    # ------------------------------------------------------------------
+    # 订单历史 & 连续亏损检测
+    # ------------------------------------------------------------------
+
+    def record_trade(self, pnl: float, symbol: str = "", side: str = "") -> None:
+        """记录一笔成交及其盈亏，用于连续亏损检测。"""
+        self._order_history.append(
+            {
+                "time": datetime.now().isoformat(),
+                "symbol": symbol,
+                "side": side,
+                "pnl": pnl,
+            }
+        )
+
+    def get_order_history(self) -> list[dict]:
+        return list(self._order_history)
+
+    def get_consecutive_loss_limit(self) -> int:
+        return self._consecutive_loss_limit
+
+    def set_consecutive_loss_limit(self, limit: int) -> None:
+        self._consecutive_loss_limit = max(0, limit)
+        logger.info(f"Consecutive loss pause threshold set to {limit}")
+
+    # ------------------------------------------------------------------
+    # 黑名单
+    # ------------------------------------------------------------------
+
+    def add_to_blacklist(self, symbol: str) -> None:
+        self._blacklist.add(symbol)
+        logger.info(f"Blacklist: added {symbol}")
+
+    def remove_from_blacklist(self, symbol: str) -> None:
+        self._blacklist.discard(symbol)
+        logger.info(f"Blacklist: removed {symbol}")
+
+    def get_blacklist(self) -> set[str]:
+        return set(self._blacklist)
+
+    def is_blacklisted(self, symbol: str) -> bool:
+        return symbol in self._blacklist
+
+    # ------------------------------------------------------------------
+    # 流动性过滤
+    # ------------------------------------------------------------------
+
+    def set_liquidity_config(
+        self,
+        min_volume: int = 10000,
+        min_turnover: float = 1_000_000.0,
+        enabled: bool = True,
+    ) -> None:
+        self._liquidity_enabled = enabled
+        self._min_volume = min_volume
+        self._min_turnover = min_turnover
+        logger.info(
+            f"Liquidity filter: enabled={enabled}, "
+            f"min_volume={min_volume}, min_turnover={min_turnover}"
+        )
+
+    def get_liquidity_config(self) -> dict:
+        return {
+            "enabled": self._liquidity_enabled,
+            "min_volume": self._min_volume,
+            "min_turnover": self._min_turnover,
+        }
+
+    def check_liquidity(self, volume: int, turnover: float) -> bool:
+        """返回 True 表示流动性充足可交易，False 表示不足。"""
+        if not self._liquidity_enabled:
+            return True
+        return volume >= self._min_volume and turnover >= self._min_turnover
+
     def get_status(self) -> dict:
         """返回当前风控状态摘要。"""
         return {
@@ -210,6 +296,9 @@ class RiskEngine:
             "max_single_order_pct": float(self._max_single_order_pct),
             "max_daily_loss_pct": float(self._max_daily_loss_pct),
             "max_order_frequency": self._max_order_frequency,
+            "blacklist_count": len(self._blacklist),
+            "liquidity_filter": self._liquidity_enabled,
+            "consecutive_loss_limit": self._consecutive_loss_limit,
         }
 
     def pre_trade_check(
@@ -227,6 +316,13 @@ class RiskEngine:
             return RiskDecision(
                 result=RiskCheckResult.REJECTED,
                 reason="Emergency freeze: all orders rejected",
+            )
+
+        symbol = str(order.instrument_id)
+        if self.is_blacklisted(symbol):
+            return RiskDecision(
+                result=RiskCheckResult.REJECTED,
+                reason=f"Blacklisted: {symbol}",
             )
 
         self._maybe_reset_daily(datetime.now())
