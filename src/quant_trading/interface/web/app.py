@@ -243,10 +243,115 @@ def _adf_pvalue(stat: float, nobs: int) -> float:
         return 0.80
 
 
+_CN_NAMES: dict[str, str] = {}
+_CN_NAMES_LOADED = False
+
+
+def _load_cn_names():
+    """Lazy-load Chinese security names from AkShare."""
+    global _CN_NAMES, _CN_NAMES_LOADED
+    if _CN_NAMES_LOADED:
+        return
+    try:
+        import akshare as ak
+
+        _ensure_no_proxy_for_names()
+        for loader in [
+            lambda: ak.stock_zh_a_spot_em()[["代码", "名称"]],
+            lambda: ak.fund_name_em()[["基金代码", "基金简称"]],
+        ]:
+            try:
+                df = loader()
+                for _, row in df.iterrows():
+                    _CN_NAMES[str(row.iloc[0])] = str(row.iloc[1])
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    _CN_NAMES_LOADED = True
+
+
+def _ensure_no_proxy_for_names():
+    import os
+
+    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = "*"
+
+
+_STATIC_CN_NAMES = {
+    "600519": "贵州茅台",
+    "000001": "平安银行",
+    "000300": "沪深300",
+    "510300": "沪深300ETF",
+    "510500": "中证500ETF",
+    "159915": "创业板ETF",
+    "159659": "纳指100ETF",
+    "513500": "标普500ETF",
+    "513400": "道琼斯ETF",
+    "513860": "东证ETF",
+    "513030": "德国ETF华安",
+    "513080": "法国ETF",
+    "159501": "纳指ETF嘉实",
+    "159502": "标普生物科技ETF",
+    "159632": "纳斯达克100ETF",
+    "000016": "上证50",
+    "399001": "深成指",
+    "399006": "创业板指",
+    "000905": "中证500",
+    "600036": "招商银行",
+    "601318": "中国平安",
+    "000858": "五粮液",
+    "002594": "比亚迪",
+    "600276": "恒瑞医药",
+    "000333": "美的集团",
+    "601398": "工商银行",
+    "600887": "伊利股份",
+    "002415": "海康威视",
+    "AAPL": "苹果",
+    "TSLA": "特斯拉",
+    "MSFT": "微软",
+    "GOOGL": "谷歌",
+    "AMZN": "亚马逊",
+    "NVDA": "英伟达",
+    "META": "Meta",
+    "JPM": "摩根大通",
+    "MU": "美光科技",
+    "WU": "西联汇款",
+    "110011": "易方达中小盘",
+    "161725": "招商中证白酒",
+    "012414": "景顺长城新能源",
+    "005827": "易方达蓝筹精选",
+    "163406": "兴全合润",
+    "260108": "景顺长城新兴成长",
+    "519069": "汇添富价值精选",
+}
+
+
+def get_cn_name(symbol_with_exchange: str) -> str:
+    """Get Chinese name for a symbol. Returns empty string if not found."""
+    code = symbol_with_exchange.split(".")[0]
+    if code in _STATIC_CN_NAMES:
+        return _STATIC_CN_NAMES[code]
+    if not _CN_NAMES_LOADED:
+        _load_cn_names()
+    return _CN_NAMES.get(code, "")
+
+
 @app.get("/api/data/instruments")
 async def data_instruments():
     instruments = list_instruments()
-    return {"instruments": instruments, "count": len(instruments)}
+    named = []
+    for sym in instruments:
+        cn = get_cn_name(sym)
+        named.append({"symbol": sym, "name": cn})
+    return {"instruments": instruments, "named": named, "count": len(instruments)}
+
+
+@app.get("/api/data/cn_name/{symbol}")
+async def data_cn_name(symbol: str):
+    """查询标的中文名称。"""
+    return {"symbol": symbol, "name": get_cn_name(symbol)}
 
 
 @app.get("/api/data/bars/{symbol}")

@@ -140,7 +140,9 @@ class AkShareFeed(DataFeed):
         exchange = instrument_id.exchange
         end = end or datetime.now()
 
-        if exchange in (Exchange.SSE, Exchange.SZSE):
+        if exchange == Exchange.OTC:
+            return await self._fetch_fund_nav(ak, symbol, start, end, instrument_id)
+        elif exchange in (Exchange.SSE, Exchange.SZSE):
             if self._is_index(symbol):
                 return await self._fetch_index_bars(ak, symbol, interval, start, end, instrument_id)
             elif self._is_convertible_bond(symbol):
@@ -517,4 +519,55 @@ class AkShareFeed(DataFeed):
 
         bars = [b for b in bars if start <= b.timestamp <= end]
         logger.info(f"Fetched {len(bars)} bars for {instrument_id} from AkShare")
+        return bars
+
+    # ------------------------------------------------------------------
+    # 场外基金净值
+    # ------------------------------------------------------------------
+
+    async def _fetch_fund_nav(
+        self,
+        ak,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        instrument_id: InstrumentId,
+    ) -> list[Bar]:
+        """获取场外开放式基金的累计净值，转换为K线格式用于回测。"""
+        try:
+            _ensure_no_proxy()
+            df = ak.fund_open_fund_info_em(symbol=symbol, indicator="累计净值走势")
+        except Exception as e:
+            logger.error(f"AkShare fund NAV fetch error for {symbol}: {e}")
+            return []
+
+        if df is None or df.empty:
+            return []
+
+        bars: list[Bar] = []
+        for _, row in df.iterrows():
+            try:
+                ts = row.iloc[0]
+                nav = row.iloc[1]
+                if isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts)
+                nav_d = Decimal(str(round(float(nav), 4)))
+                bars.append(
+                    Bar(
+                        instrument_id=instrument_id,
+                        timestamp=ts,
+                        interval=BarInterval.DAILY,
+                        open=nav_d,
+                        high=nav_d,
+                        low=nav_d,
+                        close=nav_d,
+                        volume=0,
+                    )
+                )
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug(f"Skipping fund row: {e}")
+                continue
+
+        bars = [b for b in bars if start <= b.timestamp <= end]
+        logger.info(f"Fetched {len(bars)} fund NAV for {instrument_id}")
         return bars

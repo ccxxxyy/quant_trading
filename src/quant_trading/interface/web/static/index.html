@@ -129,8 +129,8 @@
             <div class="panel-header"><h3>获取行情数据</h3></div>
             <form id="fetch-form" class="form">
               <div class="form-row">
-                <label>标的代码</label>
-                <input type="text" name="symbol" placeholder="600519.SSE / AAPL.NASDAQ" required />
+                <label>标的代码 <span id="fetch-cn-hint" style="color:var(--primary);font-weight:400"></span></label>
+                <input type="text" name="symbol" placeholder="600519.SSE / AAPL.NASDAQ / 161725.OTC" required />
               </div>
               <div class="form-row two-col">
                 <div>
@@ -162,7 +162,7 @@
                 </div>
               </div>
               <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.5rem;color:var(--text-muted)">
-                标的代码示例：股票 600519.SSE / ETF 510300.SSE / 指数 000300.SSE / 可转债 113050.SSE / 期货 au2412.SHFE
+                标的代码示例：股票 600519.SSE / ETF 510300.SSE / 指数 000300.SSE / 可转债 113050.SSE / 期货 au2412.SHFE / 场外基金 161725.OTC
               </p>
               <button type="submit" class="btn btn-primary btn-block">获取并存储</button>
             </form>
@@ -1349,6 +1349,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=13"></script>
+  <script src="/static/js/app.js?v=14"></script>
 </body>
 </html>
