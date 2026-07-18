@@ -232,17 +232,11 @@ def run_backtest(
     bars = store.load_bars(instrument_id, BarInterval.DAILY, start, end, adjust=adjust_type)
     used_demo_data = False
 
-    min_bars_for_backtest = 60
-
-    if len(bars) < min_bars_for_backtest:
-        all_bars = store.load_bars(instrument_id, BarInterval.DAILY, adjust=adjust_type)
-        if len(all_bars) >= min_bars_for_backtest:
-            bars = all_bars[-max(min_bars_for_backtest, len(bars)) :]
-        elif use_demo_data:
-            extended_start = start - timedelta(days=int(min_bars_for_backtest * 2))
-            bars = generate_demo_bars(instrument_id, start=extended_start, end=end)
+    if not bars:
+        if use_demo_data:
+            bars = generate_demo_bars(instrument_id, start=start, end=end)
             used_demo_data = True
-        elif not bars:
+        else:
             raise ValueError(f"No data for {symbol}. Fetch data first or enable demo mode.")
 
     engine = BacktestEngine(

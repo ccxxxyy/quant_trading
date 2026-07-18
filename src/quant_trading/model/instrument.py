@@ -20,6 +20,7 @@ class Exchange(Enum):
     NASDAQ = "NASDAQ"  # 纳斯达克交易所
     BINANCE = "BINANCE"  # 币安交易所
     IB = "IB"  # 盈透证券（多交易所通道）
+    OTC = "OTC"  # 场外（场外基金）
 
 
 class InstrumentType(Enum):
@@ -29,6 +30,7 @@ class InstrumentType(Enum):
     OPTION = "option"  # 期权合约
     CRYPTO = "crypto"  # 加密货币
     INDEX = "index"  # 指数
+    FUND = "fund"  # 场外基金（开放式基金）
 
 
 class Currency(Enum):

@@ -191,25 +191,32 @@ function _classifyMarket(sym) {
   const ex = sym.split(".").pop().toUpperCase();
   if (["NASDAQ", "NYSE", "AMEX"].includes(ex)) return "us";
   if (["SHFE", "DCE", "CZCE", "CFFEX", "INE"].includes(ex)) return "futures";
+  if (ex === "OTC") return "fund";
   return "a";
 }
 
-const _MARKET_LABELS = { a: "A 股 / 指数", us: "美股", futures: "期货" };
+const _MARKET_LABELS = { a: "A 股 / 指数", us: "美股", futures: "期货", fund: "场外基金" };
+
+let _cnNameMap = {};
 
 async function loadInstruments(focusSymbol) {
   const data = await api("/data/instruments");
   const list = document.getElementById("instrument-list");
   document.getElementById("instrument-count").textContent = data.count;
 
+  if (data.named) {
+    data.named.forEach((n) => { if (n.name) _cnNameMap[n.symbol] = n.name; });
+  }
+
   if (!data.instruments.length) {
     list.innerHTML = '<div class="empty-state">暂无数据，请先获取行情</div>';
     return;
   }
 
-  const groups = { a: [], us: [], futures: [] };
+  const groups = { a: [], us: [], futures: [], fund: [] };
   data.instruments.forEach((sym) => groups[_classifyMarket(sym)].push(sym));
 
-  const _HINTS = { a: "600519.SSE", us: "AAPL.NASDAQ", futures: "au2412.SHFE" };
+  const _HINTS = { a: "600519.SSE", us: "AAPL.NASDAQ", futures: "au2412.SHFE", fund: "161725.OTC" };
   let html = "";
   for (const [key, label] of Object.entries(_MARKET_LABELS)) {
     html += `<div class="instrument-group-label">${label}（${groups[key].length}）</div>`;
@@ -218,7 +225,11 @@ async function loadInstruments(focusSymbol) {
       continue;
     }
     html += groups[key]
-      .map((sym) => `<div class="instrument-item" data-symbol="${sym}">${sym}<span>→</span></div>`)
+      .map((sym) => {
+        const cn = _cnNameMap[sym] || "";
+        const display = cn ? `${cn} ${sym}` : sym;
+        return `<div class="instrument-item" data-symbol="${sym}">${display}<span>→</span></div>`;
+      })
       .join("");
   }
   list.innerHTML = html;
@@ -266,6 +277,40 @@ async function previewBars(symbol, activeEl, startDate, endDate) {
     renderPriceChart([]);
   }
 }
+
+// Chinese name hint for symbol input
+(function() {
+  const symInput = document.querySelector('#fetch-form [name="symbol"]');
+  const hint = document.getElementById("fetch-cn-hint");
+  if (!symInput || !hint) return;
+  let timer = null;
+  symInput.addEventListener("input", () => {
+    clearTimeout(timer);
+    const val = symInput.value.trim();
+    if (!val || !val.includes(".")) { hint.textContent = ""; return; }
+    const code = val.split(".")[0];
+    if (_cnNameMap[val]) { hint.textContent = _cnNameMap[val]; return; }
+    if (code in _STATIC_CN_NAMES_JS) { hint.textContent = _STATIC_CN_NAMES_JS[code]; return; }
+    timer = setTimeout(async () => {
+      try {
+        const r = await api(`/data/cn_name/${encodeURIComponent(val)}`);
+        if (r.name) { hint.textContent = r.name; _cnNameMap[val] = r.name; }
+        else hint.textContent = "";
+      } catch { hint.textContent = ""; }
+    }, 400);
+  });
+})();
+
+const _STATIC_CN_NAMES_JS = {
+  "600519": "贵州茅台", "000001": "平安银行", "000300": "沪深300",
+  "510300": "沪深300ETF", "510500": "中证500ETF", "159915": "创业板ETF",
+  "161725": "招商中证白酒", "005827": "易方达蓝筹精选",
+  "163406": "兴全合润", "519069": "汇添富价值精选",
+  "110011": "易方达中小盘", "012414": "景顺长城新能源",
+  "260108": "景顺长城新兴成长",
+  "AAPL": "苹果", "TSLA": "特斯拉", "MSFT": "微软", "GOOGL": "谷歌",
+  "AMZN": "亚马逊", "NVDA": "英伟达", "MU": "美光科技",
+};
 
 document.getElementById("fetch-form").addEventListener("submit", async (e) => {
   e.preventDefault();
