@@ -65,6 +65,7 @@ function setMetricColor(el, value) {
 // ── Navigation ─────────────────────────────────────────────
 
 function navigateTo(page) {
+  if (!PAGE_META[page]) page = "dashboard";
   document.querySelectorAll(".nav-item").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.page === page);
   });
@@ -74,6 +75,7 @@ function navigateTo(page) {
   const meta = PAGE_META[page];
   document.getElementById("page-title").textContent = meta.title;
   document.getElementById("page-desc").textContent = meta.desc;
+  try { localStorage.setItem("qt_active_page", page); } catch { /* ignore */ }
   if (page === "paper") refreshPaperState();
   if (page === "data") loadInstruments();
   if (page === "dashboard") loadWatchlist();
@@ -123,24 +125,187 @@ function renderPriceChart(bars) {
   destroyChart("price-chart");
   const ctx = document.getElementById("price-chart");
   if (!ctx || !bars?.length) return;
+  charts["price-chart"] = new Chart(ctx, _candlestickConfig(bars, "price-chart"));
+}
 
-  charts["price-chart"] = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: bars.map((b) => b.timestamp.slice(0, 10)),
-      datasets: [{
-        label: "收盘价",
-        data: bars.map((b) => b.close),
-        borderColor: "#22c55e",
-        backgroundColor: "rgba(34, 197, 94, 0.06)",
-        fill: true,
-        tension: 0.2,
-        pointRadius: 0,
-        borderWidth: 1.5,
-      }],
+function _ohlcTooltip(bars, labels) {
+  return {
+    backgroundColor: "#1a2230",
+    borderColor: "#2a3548",
+    borderWidth: 1,
+    titleFont: { family: "JetBrains Mono", size: 12 },
+    bodyFont: { family: "JetBrains Mono", size: 11 },
+    callbacks: {
+      title: (items) => {
+        const i = items[0]?.dataIndex ?? 0;
+        return `日期 ${labels[i]}`;
+      },
+      label: () => null,
+      afterBody: (items) => {
+        const i = items[0]?.dataIndex ?? 0;
+        const b = bars[i];
+        if (!b) return [];
+        const o = Number(b.open);
+        const h = Number(b.high);
+        const l = Number(b.low);
+        const c = Number(b.close);
+        const prev = i > 0 ? Number(bars[i - 1].close) : o;
+        const chg = prev ? ((c - prev) / prev) * 100 : 0;
+        const sign = chg > 0 ? "+" : "";
+        const lines = [
+          `开盘  ${o.toFixed(4)}`,
+          `最高  ${h.toFixed(4)}`,
+          `最低  ${l.toFixed(4)}`,
+          `收盘  ${c.toFixed(4)}`,
+          `较前日  ${sign}${chg.toFixed(2)}%`,
+        ];
+        if (b.volume != null) lines.push(`成交量  ${b.volume}`);
+        return lines;
+      },
     },
-    options: chartOptions("价格"),
+  };
+}
+
+function _candlestickConfig(bars, chartId, tradeMarkers) {
+  const labels = bars.map((b) => (b.timestamp || "").slice(0, 10));
+  const up = getComputedStyle(document.documentElement).getPropertyValue("--up").trim() || "#ef4444";
+  const down = getComputedStyle(document.documentElement).getPropertyValue("--down").trim() || "#22c55e";
+  const closes = bars.map((b) => Number(b.close));
+  const lows = bars.map((b) => Number(b.low));
+  const highs = bars.map((b) => Number(b.high));
+  const finite = [...lows, ...highs, ...closes].filter((v) => Number.isFinite(v));
+  const ymin0 = finite.length ? Math.min(...finite) : 0;
+  const ymax0 = finite.length ? Math.max(...finite) : 1;
+  const mid = (ymin0 + ymax0) / 2 || 1;
+  const rawSpan = ymax0 - ymin0;
+  const span = rawSpan || Math.abs(mid) * 0.05 || 0.1;
+  const pad = Math.max(span * 0.12, Math.abs(mid) * 0.02, 0.02);
+  const eps = Math.max(span * 0.015, Math.abs(mid) * 0.003, 0.005);
+
+  // 场外净值 OHLC 常相等：实体用最小高度，仍画蜡烛（十字星形态），不再改成折线
+  const buyPoints = new Array(labels.length).fill(null);
+  const sellPoints = new Array(labels.length).fill(null);
+  if (tradeMarkers) {
+    for (const t of tradeMarkers) {
+      const entryIdx = labels.indexOf((t.entry_time || "").slice(0, 10));
+      const exitIdx = labels.indexOf((t.exit_time || "").slice(0, 10));
+      if (entryIdx >= 0) buyPoints[entryIdx] = closes[entryIdx];
+      if (exitIdx >= 0) sellPoints[exitIdx] = closes[exitIdx];
+    }
+  }
+
+  const markerSets = tradeMarkers
+    ? [
+        {
+          type: "line",
+          label: "买入 ▲",
+          data: buyPoints,
+          borderColor: up,
+          backgroundColor: up,
+          pointRadius: 6,
+          pointStyle: "triangle",
+          showLine: false,
+          order: 0,
+          yAxisID: "y",
+        },
+        {
+          type: "line",
+          label: "卖出 ▼",
+          data: sellPoints,
+          borderColor: down,
+          backgroundColor: down,
+          pointRadius: 6,
+          pointStyle: "triangle",
+          rotation: 180,
+          showLine: false,
+          order: 0,
+          yAxisID: "y",
+        },
+      ]
+    : [];
+
+  const wickColors = bars.map((b, i) =>
+    i === 0 || Number(b.close) >= Number(bars[i - 1].close) ? up : down,
+  );
+  const wicks = bars.map((b) => {
+    let lo = Number(b.low);
+    let hi = Number(b.high);
+    if (hi - lo < eps) {
+      const mid = (lo + hi) / 2;
+      return [mid - eps / 2, mid + eps / 2];
+    }
+    return [lo, hi];
   });
+  const bodies = bars.map((b) => {
+    const o = Number(b.open);
+    const c = Number(b.close);
+    let lo = Math.min(o, c);
+    let hi = Math.max(o, c);
+    if (hi - lo < eps) {
+      const mid = (lo + hi) / 2;
+      return [mid - eps / 2, mid + eps / 2];
+    }
+    return [lo, hi];
+  });
+
+  return {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "影线",
+          data: wicks,
+          backgroundColor: wickColors,
+          borderColor: wickColors,
+          borderWidth: 1,
+          barThickness: 1,
+          order: 2,
+        },
+        {
+          label: "实体",
+          data: bodies,
+          backgroundColor: wickColors,
+          borderColor: wickColors,
+          borderWidth: 1,
+          barThickness: Math.max(3, Math.min(10, Math.floor(900 / Math.max(bars.length, 1)))),
+          order: 1,
+        },
+        ...markerSets,
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: "index" },
+      plugins: {
+        legend: {
+          display: !!tradeMarkers,
+          labels: {
+            color: "#94a3b8",
+            font: { size: 11 },
+            filter: (item) => !["影线", "实体"].includes(item.text),
+          },
+        },
+        tooltip: _ohlcTooltip(bars, labels),
+      },
+      scales: {
+        x: {
+          stacked: false,
+          grid: { color: "rgba(42, 53, 72, 0.5)" },
+          ticks: { color: "#8b9ab5", maxTicksLimit: 10, font: { size: 10 } },
+        },
+        y: {
+          beginAtZero: false,
+          min: ymin0 - pad,
+          max: ymax0 + pad,
+          grid: { color: "rgba(42, 53, 72, 0.5)" },
+          ticks: { color: "#8b9ab5", font: { family: "JetBrains Mono", size: 10 } },
+          title: { display: true, text: "价格/净值", color: "#8b9ab5", font: { size: 11 } },
+        },
+      },
+    },
+  };
 }
 
 function chartOptions(yLabel) {
@@ -190,11 +355,19 @@ function updateDashboard() {
 
 // ── Data Page ──────────────────────────────────────────────
 
+function _isOnExchangeFund(sym) {
+  const [code, ex] = sym.split(".");
+  if (!["SSE", "SZSE"].includes((ex || "").toUpperCase())) return false;
+  return /^(51|56|58|15|16|18|50)/.test(code || "");
+}
+
 function _panelGroup(sym) {
   const ex = sym.split(".").pop().toUpperCase();
   if (["NASDAQ", "NYSE", "AMEX"].includes(ex)) return "us";
   if (ex === "OTC") return "fund";
-  return "other";
+  if (["SHFE", "DCE", "CZCE", "CFFEX", "INE"].includes(ex)) return "futures";
+  if (_isOnExchangeFund(sym)) return "etf";
+  return "a";
 }
 
 let _cnNameMap = {};
@@ -273,11 +446,17 @@ async function loadInstruments(focusSymbol) {
     /* ignore */
   }
 
-  const groups = { us: [], fund: [], other: [] };
+  const groups = { a: [], etf: [], futures: [], us: [], fund: [] };
   (data.instruments || []).forEach((sym) => groups[_panelGroup(sym)].push(sym));
 
-  const hints = { us: "AAPL.NASDAQ", fund: "161725.OTC", other: "600519.SSE / 510300.SSE" };
-  for (const key of ["us", "fund", "other"]) {
+  const hints = {
+    a: "600519.SSE",
+    etf: "510300.SSE",
+    futures: "au2412.SHFE",
+    us: "AAPL.NASDAQ",
+    fund: "161725.OTC",
+  };
+  for (const key of ["a", "etf", "futures", "us", "fund"]) {
     const list = document.getElementById(`instrument-list-${key}`);
     const cnt = document.getElementById(`count-${key}`);
     if (cnt) cnt.textContent = `(${groups[key].length})`;
@@ -325,8 +504,9 @@ async function previewBars(symbol, activeEl, startDate, endDate) {
       if (parent) parent.querySelector(".empty-hint")?.remove();
       renderPriceChart(data.bars);
     }
-  } catch {
+  } catch (err) {
     renderPriceChart([]);
+    toast(err?.message || "加载 K 线失败", "error");
   }
 }
 
@@ -403,22 +583,36 @@ document.getElementById("fetch-form").addEventListener("submit", async (e) => {
 
 function renderStrategyParams(strategyId) {
   const container = document.getElementById("strategy-params");
+  const hint = document.getElementById("strategy-params-hint");
   const meta = strategiesMeta[strategyId];
   if (!meta?.params) {
     container.innerHTML = "";
+    if (hint) hint.style.display = "none";
     return;
   }
+
+  const help = {
+    fast_period: "用最近 N 个交易日收盘价算快均线（越小越灵敏）",
+    slow_period: "用最近 N 个交易日收盘价算慢均线（须 > 快线）",
+    quantity: "每次金叉/死叉买卖的股数或基金份额",
+  };
 
   container.innerHTML = Object.entries(meta.params)
     .map(([key, spec]) => `
       <div class="form-row">
-        <label>${spec.label || key}</label>
-        <input type="${spec.type === 'float' ? 'number' : spec.type === 'int' ? 'number' : 'text'}"
+        <label title="${help[key] || ""}">${spec.label || key}</label>
+        <input type="${spec.type === "float" ? "number" : spec.type === "int" ? "number" : "text"}"
                name="param_${key}"
-               value="${spec.default ?? ''}"
-               step="${spec.type === 'float' ? '0.1' : '1'}" />
+               value="${spec.default ?? ""}"
+               step="${spec.type === "float" ? "0.1" : "1"}"
+               title="${help[key] || ""}" />
       </div>`)
     .join("");
+
+  if (hint) {
+    const show = strategyId === "dual_ma" || (meta.params.fast_period && meta.params.slow_period);
+    hint.style.display = show ? "" : "none";
+  }
 }
 
 function populateStrategySelect() {
@@ -461,10 +655,17 @@ function updateMetrics(metrics) {
   }
 }
 
+function _sideCn(side) {
+  const s = (side || "").toLowerCase();
+  if (s === "long" || s === "buy") return "买入/做多";
+  if (s === "short" || s === "sell") return "卖出/做空";
+  return side || "-";
+}
+
 function updateTradesTable(trades) {
   const tbody = document.querySelector("#trades-table tbody");
   if (!trades?.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无交易记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无交易记录（该时段策略未触发买卖信号）</td></tr>';
     return;
   }
 
@@ -473,7 +674,7 @@ function updateTradesTable(trades) {
       const pnlClass = t.pnl >= 0 ? "positive" : "negative";
       return `<tr>
         <td>${t.instrument_id}</td>
-        <td>${t.side}</td>
+        <td>${_sideCn(t.side)}</td>
         <td>${t.entry_time?.slice(0, 10)} @ ${fmtNum(t.entry_price)}</td>
         <td>${t.exit_time?.slice(0, 10)} @ ${fmtNum(t.exit_price)}</td>
         <td>${t.quantity}</td>
@@ -519,7 +720,7 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     updateMetrics(result.metrics);
     renderEquityChart("equity-chart", result.equity_curve);
     renderDrawdownChart(result.equity_curve);
-    renderKlineWithTrades(result.equity_curve, result.trades);
+    renderKlineWithTrades(result.bars || [], result.trades);
     updateTradesTable(result.trades);
     updateDashboard();
 
@@ -527,7 +728,12 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     document.getElementById("run-review-btn").disabled = false;
 
     const mode = result.used_demo_data ? "（演示数据）" : "（真实数据）";
-    toast(`回测完成${mode}: 收益率 ${fmtPct(result.metrics.total_return)}`, "success");
+    const nTrades = result.metrics?.total_trades ?? result.trades?.length ?? 0;
+    if (nTrades === 0) {
+      toast(`回测完成${mode}: 无交易（该时段双均线未出现金叉/死叉，可拉长日期或换策略）`, "error");
+    } else {
+      toast(`回测完成${mode}: 收益率 ${fmtPct(result.metrics.total_return)}`, "success");
+    }
   } catch (err) {
     let msg = err.message;
     if (msg.includes("No data") || msg.includes("Fetch data first")) {
@@ -576,40 +782,13 @@ function renderDrawdownChart(equityCurve) {
 
 // ── K-line with Trade Markers ───────────────────────────────
 
-function renderKlineWithTrades(equityCurve, trades) {
+function renderKlineWithTrades(bars, trades) {
   destroyChart("kline-trades-chart");
   const emptyEl = document.getElementById("kline-trades-empty");
   const ctx = document.getElementById("kline-trades-chart");
-  if (!ctx || !equityCurve?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
+  if (!ctx || !bars?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
   if (emptyEl) emptyEl.style.display = "none";
-
-  const labels = equityCurve.map(p => p.timestamp?.slice(0, 10) || "");
-  const prices = equityCurve.map(p => p.equity);
-
-  const buyPoints = new Array(labels.length).fill(null);
-  const sellPoints = new Array(labels.length).fill(null);
-
-  for (const t of (trades || [])) {
-    const entryDate = t.entry_time?.slice(0, 10);
-    const exitDate = t.exit_time?.slice(0, 10);
-    const entryIdx = labels.indexOf(entryDate);
-    const exitIdx = labels.indexOf(exitDate);
-    if (entryIdx >= 0) buyPoints[entryIdx] = prices[entryIdx];
-    if (exitIdx >= 0) sellPoints[exitIdx] = prices[exitIdx];
-  }
-
-  charts["kline-trades-chart"] = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        { label: "权益", data: prices, borderColor: "#3b82f6", borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false },
-        { label: "买入 ▲", data: buyPoints, borderColor: "#ef4444", backgroundColor: "#ef4444", pointRadius: 7, pointStyle: "triangle", showLine: false },
-        { label: "卖出 ▼", data: sellPoints, borderColor: "#22c55e", backgroundColor: "#22c55e", pointRadius: 7, pointStyle: "triangle", rotation: 180, showLine: false },
-      ],
-    },
-    options: { ...chartOptions("权益 + 买卖点"), plugins: { ...chartOptions("").plugins, legend: { display: true, labels: { color: "#94a3b8", font: { size: 11 } } } } },
-  });
+  charts["kline-trades-chart"] = new Chart(ctx, _candlestickConfig(bars, "kline-trades-chart", trades || []));
 }
 
 // ── Monte Carlo Stress Test ────────────────────────────────
@@ -1171,7 +1350,7 @@ function updatePaperPositions(positions) {
       const code = (p.instrument_id || "").split(".")[0];
       const cn = p.name || _cnNameMap[p.instrument_id] || _STATIC_CN_NAMES_JS[code] || "";
       const label = cn ? `${cn} ${p.instrument_id}` : p.instrument_id;
-      const sideLabel = p.side === "long" ? "多" : p.side === "short" ? "空" : p.side;
+      const sideLabel = _sideCn(p.side);
       return `<tr>
         <td>${label}</td>
         <td>${sideLabel}</td>
@@ -2636,6 +2815,9 @@ async function init() {
       loadAccounts(),
     ]);
     document.getElementById("system-status").textContent = "系统就绪";
+    let savedPage = "dashboard";
+    try { savedPage = localStorage.getItem("qt_active_page") || "dashboard"; } catch { /* ignore */ }
+    if (PAGE_META[savedPage]) navigateTo(savedPage);
   } catch (err) {
     document.getElementById("system-status").textContent = "API 未连接";
     toast("无法连接后端 API，请启动: uv run quant-web", "error");

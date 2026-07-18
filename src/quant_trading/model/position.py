@@ -107,3 +107,4 @@ class Position:
             self.opened_at = fill.timestamp
         elif self.is_flat:
             self.avg_cost = Decimal(0)
+            self.opened_at = None

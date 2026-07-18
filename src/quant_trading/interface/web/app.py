@@ -22,6 +22,7 @@ from quant_trading.interface.services import (
     get_bar_preview,
     get_system_info,
     list_instruments,
+    load_strategy,
     run_backtest,
 )
 from quant_trading.interface.web.schemas import (
@@ -1722,7 +1723,7 @@ async def live_status():
 
 
 @app.post("/api/live/start")
-async def live_start(strategy_id: str = "ma_cross", symbol: str = "DEMO.SSE"):
+async def live_start(strategy_id: str = "dual_ma", symbol: str = "600519.SSE"):
     """启动实时策略运行。"""
     runner = _get_live_runner()
     if runner.running:
@@ -1731,8 +1732,10 @@ async def live_start(strategy_id: str = "ma_cross", symbol: str = "DEMO.SSE"):
     if strategy_id not in BUILTIN_STRATEGIES:
         raise HTTPException(status_code=400, detail=f"Unknown strategy: {strategy_id}")
 
-    strategy_cls = BUILTIN_STRATEGIES[strategy_id]["class"]
-    strategy = strategy_cls(strategy_id=strategy_id)
+    try:
+        strategy = load_strategy(strategy_id, symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     runner.add_strategy(strategy, [symbol])
     await runner.start()
     return {"status": "started", **runner.get_status()}

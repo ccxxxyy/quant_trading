@@ -211,9 +211,13 @@ class BacktestEngine:
         """处理成交回报 - 更新持仓、账户资金、记录交易。"""
         self._fills.append(fill)
 
-        # 更新持仓
+        # 更新持仓（平仓前先快照入场信息，apply_fill 后均价/开仓时间会被清零）
         position = self.get_position(fill.instrument_id)
         prev_quantity = position.quantity
+        entry_time = position.opened_at
+        entry_price = position.avg_cost
+        realized_before = position.realized_pnl
+        commission_before = position.commission
         position.apply_fill(fill)
 
         # 更新账户资金
@@ -226,31 +230,27 @@ class BacktestEngine:
 
         self._account.commission += fill.commission
 
-        # 如果持仓完全平仓，记录一笔完整交易
+        # 如果持仓完全平仓，记录一笔完整交易（盈亏取本回合增量，非累计）
         if prev_quantity != 0 and position.quantity == 0:
-            self._record_trade_close(fill, prev_quantity)
+            pnl = float(position.realized_pnl - realized_before)
+            commission = float(position.commission - commission_before)
+            self._trade_records.append(
+                TradeRecord(
+                    instrument_id=str(fill.instrument_id),
+                    side="long" if prev_quantity > 0 else "short",
+                    entry_time=entry_time or fill.timestamp,
+                    exit_time=fill.timestamp,
+                    entry_price=float(entry_price) if entry_price else 0.0,
+                    exit_price=float(fill.price),
+                    quantity=abs(prev_quantity),
+                    pnl=pnl,
+                    commission=commission,
+                    return_pct=pnl / float(self._initial_capital) if self._initial_capital else 0,
+                )
+            )
 
         # 发送成交事件
         self._event_bus.publish(Event(type=EventType.FILL, data=fill, timestamp=fill.timestamp))
-
-    def _record_trade_close(self, closing_fill: Fill, prev_quantity: int) -> None:
-        """记录一笔完整的开仓→平仓交易。"""
-        position = self.get_position(closing_fill.instrument_id)
-        pnl = float(position.realized_pnl)
-        self._trade_records.append(
-            TradeRecord(
-                instrument_id=str(closing_fill.instrument_id),
-                side="long" if prev_quantity > 0 else "short",
-                entry_time=position.opened_at or closing_fill.timestamp,
-                exit_time=closing_fill.timestamp,
-                entry_price=float(position.avg_cost) if position.avg_cost else 0,
-                exit_price=float(closing_fill.price),
-                quantity=abs(prev_quantity),
-                pnl=pnl,
-                commission=float(position.commission),
-                return_pct=pnl / float(self._initial_capital) if self._initial_capital else 0,
-            )
-        )
 
     def _calculate_equity(self) -> float:
         """计算当前总权益（可用资金 + 持仓市值）。"""

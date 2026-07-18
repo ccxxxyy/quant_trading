@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=14" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -188,7 +188,7 @@
               <h3>已存储标的</h3>
               <span class="badge" id="instrument-count">0</span>
             </div>
-            <p class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)">三栏独立滚动；点「自选」加入总览自选列表，点名称预览 K 线。</p>
+            <p class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)">三栏：美股 / 场外基金 / 国内（A股·场内·期货上下分）；点「自选」加入总览，点名称预览 K 线。</p>
             <div class="instrument-tri">
               <div class="instrument-col">
                 <div class="instrument-group-label">美股 <span id="count-us">0</span></div>
@@ -198,9 +198,19 @@
                 <div class="instrument-group-label">场外基金 <span id="count-fund">0</span></div>
                 <div class="instrument-list" id="instrument-list-fund"></div>
               </div>
-              <div class="instrument-col">
-                <div class="instrument-group-label">A股 / 场内 / 期货 <span id="count-other">0</span></div>
-                <div class="instrument-list" id="instrument-list-other"></div>
+              <div class="instrument-col instrument-col-stack">
+                <div class="instrument-stack-block">
+                  <div class="instrument-group-label">A 股 <span id="count-a">0</span></div>
+                  <div class="instrument-list" id="instrument-list-a"></div>
+                </div>
+                <div class="instrument-stack-block">
+                  <div class="instrument-group-label">场内基金 <span id="count-etf">0</span></div>
+                  <div class="instrument-list" id="instrument-list-etf"></div>
+                </div>
+                <div class="instrument-stack-block">
+                  <div class="instrument-group-label">期货 <span id="count-futures">0</span></div>
+                  <div class="instrument-list" id="instrument-list-futures"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -273,6 +283,9 @@
                 <input type="number" name="capital" value="100000" min="1" step="1" placeholder="可输入任意金额，如 500" />
               </div>
               <div id="strategy-params" class="strategy-params"></div>
+              <p id="strategy-params-hint" class="panel-text" style="font-size:0.72rem;color:var(--text-muted);margin:0">
+                双均线：快线/慢线是计算均线用的「交易日天数」（如 10=近10日均价）。金叉=快线上穿慢线→买；死叉=下穿→卖。下单数量=每次买卖的股数/份额。建议回测区间 ≥ 慢线×3（如慢线30则至少约3个月）。
+              </p>
               <div class="form-row two-col">
                 <div>
                   <label>复权模式</label>
@@ -351,6 +364,26 @@
           </div>
         </div>
 
+        <!-- 策略对比 -->
+        <div class="panel compare-panel">
+          <div class="panel-header">
+            <h3>策略对比（全部策略 vs 同一标的）</h3>
+            <button class="btn btn-sm btn-primary" id="run-compare-btn">运行对比</button>
+          </div>
+          <div class="chart-wrap"><canvas id="compare-equity-chart"></canvas></div>
+          <div class="table-wrap" style="margin-top:0.5rem">
+            <table class="data-table" id="compare-table">
+              <thead>
+                <tr>
+                  <th>策略</th><th>总收益率</th><th>Sharpe</th>
+                  <th>最大回撤</th><th>交易次数</th><th>胜率</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- Walk-Forward 防过拟合 -->
         <div class="panel">
           <div class="panel-header"><h3>Walk-Forward 防过拟合分析</h3></div>
@@ -381,10 +414,10 @@
 
         <!-- K线叠加买卖点 -->
         <div class="panel">
-          <div class="panel-header"><h3>K 线叠加买卖点</h3></div>
-          <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">运行回测后自动在 K 线图上标注策略的买入(▲)和卖出(▼)信号。</p>
+          <div class="panel-header"><h3>K 线蜡烛图 + 买卖点</h3></div>
+          <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">蜡烛图展示开高低收；鼠标悬停查看当日详情；▲买入 / ▼卖出。</p>
           <div class="chart-wrap tall"><canvas id="kline-trades-chart"></canvas></div>
-          <div id="kline-trades-empty" class="empty-state">运行回测后自动展示</div>
+          <div id="kline-trades-empty" class="empty-state">运行回测后展示蜡烛图（悬停查看开高低收）</div>
         </div>
 
         <!-- Monte Carlo 压力测试 -->
@@ -453,25 +486,6 @@
           <div id="heatmap-empty" class="empty-state">请先在参数优化页面运行优化</div>
         </div>
 
-        <!-- 策略对比 -->
-        <div class="panel compare-panel">
-          <div class="panel-header">
-            <h3>策略对比（全部策略 vs 同一标的）</h3>
-            <button class="btn btn-sm btn-primary" id="run-compare-btn">运行对比</button>
-          </div>
-          <div class="chart-wrap"><canvas id="compare-equity-chart"></canvas></div>
-          <div class="table-wrap" style="margin-top:0.5rem">
-            <table class="data-table" id="compare-table">
-              <thead>
-                <tr>
-                  <th>策略</th><th>总收益率</th><th>Sharpe</th>
-                  <th>最大回撤</th><th>交易次数</th><th>胜率</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
       </section>
 
       <!-- Parameter Optimization -->
@@ -678,14 +692,17 @@
               </div>
               <div class="form-row two-col">
                 <div>
-                  <label>数量</label>
-                  <input type="number" name="quantity" value="100" min="1" />
+                  <label>数量（股/份/手）</label>
+                  <input type="number" name="quantity" value="10" min="1" title="买卖多少股或基金份额，不是金额" />
                 </div>
                 <div>
-                  <label>价格（限价单）</label>
-                  <input type="number" name="price" step="0.01" placeholder="市价单无需填写" />
+                  <label>限价（元）</label>
+                  <input type="number" name="price" step="0.01" placeholder="选「市价」可留空" title="仅限价单需要填写目标成交价；市价单按最新价成交，不必填" />
                 </div>
               </div>
+              <p class="panel-text" style="font-size:0.72rem;margin:0;color:var(--text-muted)">
+                按「数量」下单（如 10 股/份），成交金额≈数量×价格。类型选「市价」时限价可空；选「限价」时必须填限价。
+              </p>
               <div id="trailing-stop-fields" style="display:none">
                 <div class="form-row two-col">
                   <div>
@@ -1400,6 +1417,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=21"></script>
+  <script src="/static/js/app.js?v=26"></script>
 </body>
 </html>
