@@ -22,6 +22,7 @@ ENV/
 data/raw/*
 data/processed/*
 data/features/*
+data/paper_trading/
 !data/**/.gitkeep
 *.duckdb
 *.duckdb.wal

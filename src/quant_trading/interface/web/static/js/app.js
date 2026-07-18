@@ -12,7 +12,7 @@ const PAGE_META = {
   backtest: { title: "回测实验室", desc: "配置策略参数，运行事件驱动回测" },
   optimize: { title: "参数优化", desc: "网格搜索最优策略参数" },
   monitor: { title: "监控告警", desc: "系统告警与异常监控" },
-  paper: { title: "模拟盘", desc: "虚拟资金实时交易模拟" },
+  paper: { title: "模拟盘", desc: "虚拟资金交易（股票/基金/美股），数据持久化不丢失" },
   risk: { title: "风控中心", desc: "紧急冻结、策略暂停、一键清仓、浮亏减仓、仓位管理" },
   live: { title: "实时策略", desc: "实时策略运行、行情推送与监控" },
   ailab: { title: "AI 实验室", desc: "特征工程、模型训练与预测" },
@@ -74,6 +74,9 @@ function navigateTo(page) {
   const meta = PAGE_META[page];
   document.getElementById("page-title").textContent = meta.title;
   document.getElementById("page-desc").textContent = meta.desc;
+  if (page === "paper") refreshPaperState();
+  if (page === "data") loadInstruments();
+  if (page === "dashboard") loadWatchlist();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -187,61 +190,110 @@ function updateDashboard() {
 
 // ── Data Page ──────────────────────────────────────────────
 
-function _classifyMarket(sym) {
+function _panelGroup(sym) {
   const ex = sym.split(".").pop().toUpperCase();
   if (["NASDAQ", "NYSE", "AMEX"].includes(ex)) return "us";
-  if (["SHFE", "DCE", "CZCE", "CFFEX", "INE"].includes(ex)) return "futures";
   if (ex === "OTC") return "fund";
-  return "a";
+  return "other";
 }
 
-const _MARKET_LABELS = { a: "A 股 / 指数", us: "美股", futures: "期货", fund: "场外基金" };
-
 let _cnNameMap = {};
+let _watchlistSet = new Set();
+
+function _instrumentRowHtml(sym) {
+  const cn = _cnNameMap[sym] || "";
+  const display = cn ? `${cn} ${sym}` : sym;
+  const watched = _watchlistSet.has(sym);
+  const starBtn = watched
+    ? `<button class="btn btn-sm btn-ghost instrument-star is-watched" data-symbol="${sym}" disabled title="已在自选">已自选</button>`
+    : `<button class="btn btn-sm btn-ghost instrument-star" data-symbol="${sym}" title="加入自选">自选</button>`;
+  return `<div class="instrument-item" data-symbol="${sym}">
+    <span class="instrument-label">${display}</span>
+    <span class="instrument-actions">
+      ${starBtn}
+      <button class="btn btn-sm btn-ghost instrument-del" data-symbol="${sym}" title="删除本地数据">删除</button>
+    </span>
+  </div>`;
+}
+
+function _bindInstrumentList(listEl) {
+  if (!listEl) return;
+  listEl.querySelectorAll(".instrument-label").forEach((el) => {
+    el.addEventListener("click", () => {
+      const row = el.closest(".instrument-item");
+      previewBars(row.dataset.symbol, row);
+    });
+  });
+  listEl.querySelectorAll(".instrument-del").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const sym = btn.dataset.symbol;
+      if (!confirm(`确认删除本地数据 ${sym}？此操作不可恢复。`)) return;
+      try {
+        await api(`/data/instruments/${encodeURIComponent(sym)}`, { method: "DELETE" });
+        toast(`已删除 ${sym}`, "success");
+        await loadInstruments();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  });
+  listEl.querySelectorAll(".instrument-star:not(:disabled)").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const sym = btn.dataset.symbol;
+      try {
+        const r = await api("/watchlist", { method: "POST", body: JSON.stringify({ symbol: sym }) });
+        _watchlistSet.add(sym);
+        toast(`已加入自选: ${r.name ? r.name + " " : ""}${sym}`, "success");
+        btn.textContent = "已自选";
+        btn.disabled = true;
+        btn.classList.add("is-watched");
+        await loadWatchlist();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  });
+}
 
 async function loadInstruments(focusSymbol) {
   const data = await api("/data/instruments");
-  const list = document.getElementById("instrument-list");
-  document.getElementById("instrument-count").textContent = data.count;
+  const countEl = document.getElementById("instrument-count");
+  if (countEl) countEl.textContent = data.count;
 
   if (data.named) {
     data.named.forEach((n) => { if (n.name) _cnNameMap[n.symbol] = n.name; });
   }
 
-  if (!data.instruments.length) {
-    list.innerHTML = '<div class="empty-state">暂无数据，请先获取行情</div>';
-    return;
+  try {
+    const wl = await api("/watchlist");
+    _watchlistSet = new Set((wl.items || []).map((i) => i.symbol));
+  } catch {
+    /* ignore */
   }
 
-  const groups = { a: [], us: [], futures: [], fund: [] };
-  data.instruments.forEach((sym) => groups[_classifyMarket(sym)].push(sym));
+  const groups = { us: [], fund: [], other: [] };
+  (data.instruments || []).forEach((sym) => groups[_panelGroup(sym)].push(sym));
 
-  const _HINTS = { a: "600519.SSE", us: "AAPL.NASDAQ", futures: "au2412.SHFE", fund: "161725.OTC" };
-  let html = "";
-  for (const [key, label] of Object.entries(_MARKET_LABELS)) {
-    html += `<div class="instrument-group-label">${label}（${groups[key].length}）</div>`;
+  const hints = { us: "AAPL.NASDAQ", fund: "161725.OTC", other: "600519.SSE / 510300.SSE" };
+  for (const key of ["us", "fund", "other"]) {
+    const list = document.getElementById(`instrument-list-${key}`);
+    const cnt = document.getElementById(`count-${key}`);
+    if (cnt) cnt.textContent = `(${groups[key].length})`;
+    if (!list) continue;
     if (!groups[key].length) {
-      html += `<div class="empty-state" style="font-size:0.7rem;padding:0.25rem 0.4rem">暂无，试试获取 ${_HINTS[key]}</div>`;
-      continue;
+      list.innerHTML = `<div class="empty-state" style="font-size:0.7rem;padding:0.35rem">暂无，试试 ${hints[key]}</div>`;
+    } else {
+      list.innerHTML = groups[key].map(_instrumentRowHtml).join("");
+      _bindInstrumentList(list);
     }
-    html += groups[key]
-      .map((sym) => {
-        const cn = _cnNameMap[sym] || "";
-        const display = cn ? `${cn} ${sym}` : sym;
-        return `<div class="instrument-item" data-symbol="${sym}">${display}<span>→</span></div>`;
-      })
-      .join("");
   }
-  list.innerHTML = html;
-
-  list.querySelectorAll(".instrument-item").forEach((el) => {
-    el.addEventListener("click", () => previewBars(el.dataset.symbol, el));
-  });
 
   const target = focusSymbol && data.instruments.includes(focusSymbol)
     ? focusSymbol
     : data.instruments[0];
-  previewBars(target);
+  if (target) previewBars(target);
 }
 
 async function previewBars(symbol, activeEl, startDate, endDate) {
@@ -278,10 +330,20 @@ async function previewBars(symbol, activeEl, startDate, endDate) {
   }
 }
 
-// Chinese name hint for symbol input
-(function() {
-  const symInput = document.querySelector('#fetch-form [name="symbol"]');
-  const hint = document.getElementById("fetch-cn-hint");
+const _STATIC_CN_NAMES_JS = {
+  "600519": "贵州茅台", "000001": "平安银行", "000300": "沪深300",
+  "510300": "沪深300ETF", "510500": "中证500ETF", "159915": "创业板ETF",
+  "161725": "招商中证白酒", "005827": "易方达蓝筹精选",
+  "163406": "兴全合润", "519069": "汇添富价值精选",
+  "110011": "易方达中小盘", "012414": "景顺长城新能源",
+  "260108": "景顺长城新兴成长",
+  "AAPL": "苹果", "TSLA": "特斯拉", "MSFT": "微软", "GOOGL": "谷歌",
+  "AMZN": "亚马逊", "NVDA": "英伟达", "MU": "美光科技",
+};
+
+function bindCnNameHint(inputSelector, hintId) {
+  const symInput = document.querySelector(inputSelector);
+  const hint = document.getElementById(hintId);
   if (!symInput || !hint) return;
   let timer = null;
   symInput.addEventListener("input", () => {
@@ -299,18 +361,10 @@ async function previewBars(symbol, activeEl, startDate, endDate) {
       } catch { hint.textContent = ""; }
     }, 400);
   });
-})();
-
-const _STATIC_CN_NAMES_JS = {
-  "600519": "贵州茅台", "000001": "平安银行", "000300": "沪深300",
-  "510300": "沪深300ETF", "510500": "中证500ETF", "159915": "创业板ETF",
-  "161725": "招商中证白酒", "005827": "易方达蓝筹精选",
-  "163406": "兴全合润", "519069": "汇添富价值精选",
-  "110011": "易方达中小盘", "012414": "景顺长城新能源",
-  "260108": "景顺长城新兴成长",
-  "AAPL": "苹果", "TSLA": "特斯拉", "MSFT": "微软", "GOOGL": "谷歌",
-  "AMZN": "亚马逊", "NVDA": "英伟达", "MU": "美光科技",
-};
+}
+bindCnNameHint('#fetch-form [name="symbol"]', "fetch-cn-hint");
+bindCnNameHint('#paper-order-form [name="symbol"]', "paper-cn-hint");
+bindCnNameHint('#backtest-form [name="symbol"]', "bt-cn-hint");
 
 document.getElementById("fetch-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1114,9 +1168,13 @@ function updatePaperPositions(positions) {
   tbody.innerHTML = positions
     .map((p) => {
       const pnlClass = p.realized_pnl >= 0 ? "positive" : "negative";
+      const code = (p.instrument_id || "").split(".")[0];
+      const cn = p.name || _cnNameMap[p.instrument_id] || _STATIC_CN_NAMES_JS[code] || "";
+      const label = cn ? `${cn} ${p.instrument_id}` : p.instrument_id;
+      const sideLabel = p.side === "long" ? "多" : p.side === "short" ? "空" : p.side;
       return `<tr>
-        <td>${p.instrument_id}</td>
-        <td>${p.side}</td>
+        <td>${label}</td>
+        <td>${sideLabel}</td>
         <td>${Math.abs(p.quantity)}</td>
         <td>${fmtNum(p.avg_price)}</td>
         <td class="${pnlClass}">${fmtNum(p.realized_pnl)}</td>
@@ -1146,14 +1204,16 @@ function updatePaperOrders(orders) {
 
 async function refreshPaperState() {
   try {
-    const [accData, posData, orderData] = await Promise.all([
+    const [accData, posData, orderData, histData] = await Promise.all([
       api("/paper/account"),
       api("/paper/positions"),
       api("/paper/orders"),
+      api("/paper/order_history"),
     ]);
     updatePaperAccount(accData.account);
     updatePaperPositions(posData.positions);
     updatePaperOrders(orderData.orders);
+    updatePaperHistory(histData.orders || []);
   } catch {
     /* gateway not initialized yet */
   }
@@ -1164,8 +1224,26 @@ document.getElementById("paper-connect-btn").addEventListener("click", async () 
   try {
     const result = await api("/paper/connect", { method: "POST", body: "{}" });
     updatePaperAccount(result.account);
+    if (result.positions) updatePaperPositions(result.positions);
+    toast(`模拟盘已连接（恢复 ${result.history_count || 0} 条历史订单）`, "success");
+    await refreshPaperState();
+    await loadPaperHistory();
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
+
+document.getElementById("paper-reset-btn").addEventListener("click", async () => {
+  if (!confirm("确认重置模拟盘？所有持仓/订单/资金将清零重来。")) return;
+  showLoading(true);
+  try {
+    const result = await api("/paper/reset", { method: "POST", body: "{}" });
+    updatePaperAccount(result.account);
     updatePaperPositions([]);
     updatePaperOrders([]);
+    updatePaperHistory([]);
     toast("模拟盘已重置", "success");
   } catch (err) {
     toast(err.message, "error");
@@ -1173,6 +1251,37 @@ document.getElementById("paper-connect-btn").addEventListener("click", async () 
     showLoading(false);
   }
 });
+
+function updatePaperHistory(orders) {
+  const tbody = document.querySelector("#paper-history-table tbody");
+  const countEl = document.getElementById("paper-history-count");
+  if (countEl) countEl.textContent = `（${orders.length} 条）`;
+  if (!orders?.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无成交记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = orders.slice().reverse().map((o) => {
+    const cn = _cnNameMap[o.instrument_id] || "";
+    const label = cn ? `${cn} ${o.instrument_id}` : o.instrument_id;
+    const sideClass = o.side === "buy" ? "positive" : "negative";
+    const ts = o.timestamp ? o.timestamp.slice(0, 19).replace("T", " ") : "-";
+    return `<tr>
+      <td style="font-size:0.7rem">${ts}</td>
+      <td>${label}</td>
+      <td class="${sideClass}">${o.side === "buy" ? "买入" : "卖出"}</td>
+      <td>${o.quantity}</td>
+      <td>${fmtNum(o.price)}</td>
+      <td>${fmtNum(o.commission)}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function loadPaperHistory() {
+  try {
+    const data = await api("/paper/order_history");
+    updatePaperHistory(data.orders || []);
+  } catch { /* not initialized */ }
+}
 
 document.getElementById("paper-order-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1200,9 +1309,15 @@ document.getElementById("paper-order-form").addEventListener("submit", async (e)
     });
     updatePaperAccount(result.account);
     updatePaperPositions(result.positions);
-    toast(`订单已提交: ${result.status}`, "success");
-    const orderData = await api("/paper/orders");
-    updatePaperOrders(orderData.orders);
+    const fillInfo = result.fill_price != null ? ` 成交价: ¥${fmtNum(result.fill_price)}` : "";
+    const priceWarn = result.price_from_local_data === false
+      ? "（无本地行情，使用默认价100，请先在数据管理获取该标的）"
+      : "";
+    toast(
+      `订单${result.status === "filled" ? "已成交" : "已提交"}: ${result.status}${fillInfo}${priceWarn}`,
+      priceWarn ? "error" : "success",
+    );
+    await refreshPaperState();
   } catch (err) {
     toast(err.message, "error");
   } finally {
@@ -2396,6 +2511,90 @@ async function refreshSystemInfo() {
   populateLiveStrategySelect();
 }
 
+let _watchlistTimer = null;
+
+function _fmtChg(v) {
+  if (v == null || Number.isNaN(Number(v))) return "-";
+  const n = Number(v);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}%`;
+}
+
+async function loadWatchlist() {
+  const list = document.getElementById("watchlist-list");
+  const countEl = document.getElementById("watchlist-count");
+  if (!list) return;
+  try {
+    const data = await api("/watchlist");
+    if (countEl) countEl.textContent = data.count || 0;
+    if (!data.items?.length) {
+      list.innerHTML = '<div class="empty-state" style="font-size:0.75rem">暂无自选，输入代码后点击「加入自选」</div>';
+      return;
+    }
+    list.innerHTML = data.items.map((item) => {
+      const name = item.name || item.symbol.split(".")[0];
+      const code = item.symbol;
+      const dateStr = item.asof_date || "-";
+      const chg = _fmtChg(item.change_pct);
+      const chgCls = item.change_pct > 0 ? "positive" : item.change_pct < 0 ? "negative" : "";
+      return `<div class="watchlist-row" data-symbol="${code}">
+        <div class="watchlist-main">
+          <div class="watchlist-name watchlist-label">${name}</div>
+          <div class="watchlist-code">${code}</div>
+        </div>
+        <div class="watchlist-chg">
+          <div class="watchlist-chg-label">当日涨幅 · ${dateStr}</div>
+          <div class="watchlist-chg-val ${chgCls}">${chg}</div>
+        </div>
+        <button class="btn btn-sm btn-ghost watchlist-remove" data-symbol="${code}">移除</button>
+      </div>`;
+    }).join("");
+    list.querySelectorAll(".watchlist-label").forEach((el) => {
+      el.addEventListener("click", () => {
+        const sym = el.closest(".watchlist-row").dataset.symbol;
+        previewBars(sym);
+        const fetchInput = document.querySelector('#fetch-form [name="symbol"]');
+        if (fetchInput) fetchInput.value = sym;
+      });
+    });
+    list.querySelectorAll(".watchlist-remove").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          await api(`/watchlist/${encodeURIComponent(btn.dataset.symbol)}`, { method: "DELETE" });
+          toast("已移除自选", "success");
+          await loadWatchlist();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      });
+    });
+    if (!_watchlistTimer) {
+      _watchlistTimer = setInterval(() => {
+        const page = document.getElementById("page-dashboard");
+        if (page && page.classList.contains("active")) loadWatchlist();
+      }, 60000);
+    }
+  } catch {
+    list.innerHTML = '<div class="empty-state">自选加载失败</div>';
+  }
+}
+
+document.getElementById("watchlist-add-btn")?.addEventListener("click", async () => {
+  const input = document.getElementById("watchlist-input");
+  const symbol = (input?.value || "").trim();
+  if (!symbol) { toast("请输入标的代码", "error"); return; }
+  try {
+    const r = await api("/watchlist", { method: "POST", body: JSON.stringify({ symbol }) });
+    const name = r.name ? `${r.name} ` : "";
+    toast(`已加入自选: ${name}${r.symbol}`, "success");
+    if (input) input.value = "";
+    await loadWatchlist();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
 function setDefaultDates() {
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
@@ -2418,6 +2617,7 @@ async function init() {
     await refreshSystemInfo();
     await Promise.all([
       loadInstruments(),
+      loadWatchlist(),
       loadAlerts(),
       loadMonitorConfig(),
       refreshPaperState(),
@@ -2450,6 +2650,7 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
     await refreshSystemInfo();
     await Promise.all([
       loadInstruments(),
+      loadWatchlist(),
       loadAlerts(),
       loadMonitorConfig(),
       refreshPaperState(),

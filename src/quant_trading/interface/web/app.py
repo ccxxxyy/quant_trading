@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -72,8 +73,38 @@ def _get_paper_gateway(
             initial_capital=capital,
             commission_rate=commission,
             slippage_rate=slippage,
+            account_name=name,
         )
     return _paper_gateways[name]
+
+
+def _get_latest_price(symbol: str) -> tuple[Decimal, bool]:
+    """从本地存储的K线数据中获取标的最新收盘价。
+
+    Returns:
+        (price, from_local_data) — from_local_data=False 表示使用了默认价。
+    """
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.market import BarInterval
+
+    try:
+        settings = Settings.load()
+        store = DataStore(settings.data.parquet_dir)
+        instrument_id = InstrumentId.from_str(symbol)
+        bars = store.load_bars(instrument_id, BarInterval.DAILY)
+        if bars:
+            return bars[-1].close, True
+    except Exception:
+        pass
+    # Fallback: use gateway cache or default
+    gw = _paper_gateways.get(_active_account)
+    if gw:
+        cached = gw._latest_prices.get(symbol)
+        if cached:
+            return cached, True
+    return Decimal("100.00"), False
 
 
 # ── Static pages ───────────────────────────────────────────
@@ -325,14 +356,40 @@ _STATIC_CN_NAMES = {
     "163406": "兴全合润",
     "260108": "景顺长城新兴成长",
     "519069": "汇添富价值精选",
+    "008888": "华夏国证半导体芯片ETF联接C",
+    "688256": "寒武纪",
+    "au2412": "黄金2412",
+    "au": "黄金",
+    "ag": "白银",
+    "cu": "铜",
+    "al": "铝",
+    "zn": "锌",
+    "rb": "螺纹钢",
+    "i": "铁矿石",
+    "m": "豆粕",
+    "y": "豆油",
+    "p": "棕榈油",
+    "IF": "沪深300股指",
+    "IH": "上证50股指",
+    "IC": "中证500股指",
+    "IM": "中证1000股指",
 }
 
 
 def get_cn_name(symbol_with_exchange: str) -> str:
     """Get Chinese name for a symbol. Returns empty string if not found."""
-    code = symbol_with_exchange.split(".")[0]
+    code = symbol_with_exchange.split(".")[0].strip()
     if code in _STATIC_CN_NAMES:
         return _STATIC_CN_NAMES[code]
+    # 期货合约：au2412 → 黄金2412
+    import re
+
+    m = re.match(r"^([a-zA-Z]+)(\d{3,4})$", code)
+    if m:
+        product, month = m.group(1), m.group(2)
+        product_name = _STATIC_CN_NAMES.get(product) or _STATIC_CN_NAMES.get(product.lower())
+        if product_name:
+            return f"{product_name}{month}"
     if not _CN_NAMES_LOADED:
         _load_cn_names()
     return _CN_NAMES.get(code, "")
@@ -369,7 +426,7 @@ async def data_fetch(req: FetchDataRequest):
         start = datetime.strptime(req.start, "%Y-%m-%d")
         end = datetime.strptime(req.end, "%Y-%m-%d") if req.end else None
         result = await fetch_market_data(
-            symbol=req.symbol,
+            symbol=req.symbol.strip(),
             start=start,
             end=end,
             interval=req.interval,
@@ -385,6 +442,25 @@ async def data_fetch(req: FetchDataRequest):
         ) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.delete("/api/data/instruments/{symbol}")
+async def data_delete_instrument(symbol: str):
+    """删除本地已存储标的的全部行情数据。"""
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+    from quant_trading.model.instrument import InstrumentId
+
+    try:
+        instrument_id = InstrumentId.from_str(symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    settings = Settings.load()
+    store = DataStore(settings.data.parquet_dir)
+    ok = store.delete_instrument(instrument_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"未找到本地数据: {symbol}")
+    return {"status": "deleted", "symbol": str(instrument_id)}
 
 
 @app.get("/api/data/catalog")
@@ -891,13 +967,30 @@ async def accounts_delete(name: str):
 
 @app.post("/api/paper/connect")
 async def paper_connect(req: PaperConfigRequest | None = None):
-    """初始化/重置模拟盘网关。"""
+    """连接模拟盘（恢复之前的状态，不会重置）。"""
+    cfg = req or PaperConfigRequest()
+    gw = _get_paper_gateway(cfg.initial_capital, cfg.commission_rate, cfg.slippage_rate)
+    await gw.connect()
+    account = await gw.query_account()
+    positions = await gw.query_positions()
+    return {
+        "status": "connected",
+        "account": _serialize_account(account),
+        "positions": [_serialize_position(p) for p in positions],
+        "history_count": len(gw._order_history),
+    }
+
+
+@app.post("/api/paper/reset")
+async def paper_reset(req: PaperConfigRequest | None = None):
+    """重置模拟盘（清除所有订单/持仓/资金，重新开始）。"""
     cfg = req or PaperConfigRequest()
     gw = _get_paper_gateway(cfg.initial_capital, cfg.commission_rate, cfg.slippage_rate, reset=True)
+    gw.reset()
     await gw.connect()
     account = await gw.query_account()
     return {
-        "status": "connected",
+        "status": "reset",
         "account": _serialize_account(account),
     }
 
@@ -961,11 +1054,8 @@ async def paper_submit_order(req: PaperOrderRequest):
         op = "<=" if (req.cond_direction or "above") == "below" else ">="
         order.condition_expr = f"close {op} {req.cond_price}"
 
-    if order_type == OrderType.MARKET:
-        gw.on_price_update(instrument_id, Decimal("100.00"))
-    elif order_type in (OrderType.TRAILING_STOP, OrderType.CONDITIONAL):
-        price = gw._latest_prices.get(str(instrument_id), Decimal("100.00"))
-        gw.on_price_update(instrument_id, price)
+    latest_price, from_local = _get_latest_price(req.symbol)
+    gw.on_price_update(instrument_id, latest_price)
 
     order_id = await gw.submit_order(order)
     account = await gw.query_account()
@@ -974,6 +1064,8 @@ async def paper_submit_order(req: PaperOrderRequest):
     return {
         "order_id": order_id,
         "status": order.status.value,
+        "fill_price": float(latest_price),
+        "price_from_local_data": from_local,
         "account": _serialize_account(account),
         "positions": [_serialize_position(p) for p in positions],
     }
@@ -1003,6 +1095,238 @@ async def paper_orders():
     }
 
 
+@app.get("/api/paper/order_history")
+async def paper_order_history():
+    """查询模拟盘已成交订单历史。"""
+    gw = _get_paper_gateway()
+    if not gw.is_connected:
+        await gw.connect()
+    history = gw._order_history
+    return {"orders": history, "count": len(history)}
+
+
+# ── Watchlist (自选) ───────────────────────────────────────
+
+_WATCHLIST_FILE = Path("data/paper_trading/watchlist.json")
+
+
+def _load_watchlist() -> list[str]:
+    if not _WATCHLIST_FILE.exists():
+        return []
+    try:
+        data = json.loads(_WATCHLIST_FILE.read_text(encoding="utf-8"))
+        return list(data.get("symbols", []))
+    except Exception:
+        return []
+
+
+def _save_watchlist(symbols: list[str]) -> None:
+    _WATCHLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _WATCHLIST_FILE.write_text(
+        json.dumps({"symbols": symbols}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+_WATCHLIST_QUOTE_CACHE: dict[str, Any] = {"ts": 0.0, "spot": {}, "etf": {}, "industry": {}}
+
+
+def _refresh_quote_cache() -> None:
+    """刷新 A 股/ETF 行情与行业涨幅缓存（约 60 秒）。"""
+    import time
+
+    now = time.time()
+    if now - float(_WATCHLIST_QUOTE_CACHE["ts"]) < 60:
+        return
+    try:
+        import akshare as ak
+
+        _ensure_no_proxy_for_names()
+        spot: dict[str, dict[str, Any]] = {}
+        try:
+            df = ak.stock_zh_a_spot_em()
+            for _, row in df.iterrows():
+                code = str(row.get("代码", "")).strip()
+                if not code:
+                    continue
+                spot[code] = {
+                    "name": str(row.get("名称", "")),
+                    "change_pct": float(row.get("涨跌幅", 0) or 0),
+                    "price": float(row.get("最新价", 0) or 0),
+                }
+        except Exception:
+            pass
+        etf: dict[str, dict[str, Any]] = {}
+        try:
+            df_etf = ak.fund_etf_spot_em()
+            for _, row in df_etf.iterrows():
+                code = str(row.iloc[0]).strip()
+                # columns vary; try common names
+                name = str(row.get("名称", row.iloc[1] if len(row) > 1 else ""))
+                chg = row.get("涨跌幅", None)
+                if chg is None and len(row) > 4:
+                    try:
+                        chg = float(row.iloc[4])
+                    except Exception:
+                        chg = 0
+                etf[code] = {
+                    "name": name,
+                    "change_pct": float(chg or 0),
+                }
+        except Exception:
+            pass
+        industry: dict[str, float] = {}
+        try:
+            df_ind = ak.stock_board_industry_name_em()
+            for _, row in df_ind.iterrows():
+                ind_name = str(row.get("板块名称", "")).strip()
+                if ind_name:
+                    industry[ind_name] = float(row.get("涨跌幅", 0) or 0)
+        except Exception:
+            pass
+        _WATCHLIST_QUOTE_CACHE.update({"ts": now, "spot": spot, "etf": etf, "industry": industry})
+    except ImportError:
+        _WATCHLIST_QUOTE_CACHE["ts"] = now
+
+
+_SECTOR_CACHE: dict[str, str] = {}
+
+
+def _sector_for_code(code: str) -> tuple[str, float | None]:
+    """查询个股所属行业及行业涨跌幅（行业名本地缓存）。"""
+    sector = _SECTOR_CACHE.get(code, "")
+    if not sector:
+        try:
+            import akshare as ak
+
+            _ensure_no_proxy_for_names()
+            info = ak.stock_individual_info_em(symbol=code)
+            for _, row in info.iterrows():
+                item = str(row.iloc[0])
+                if item in ("行业", "所属行业"):
+                    sector = str(row.iloc[1]).strip()
+                    break
+            if sector:
+                _SECTOR_CACHE[code] = sector
+        except Exception:
+            return "", None
+    if not sector:
+        return "", None
+    _refresh_quote_cache()
+    chg = _WATCHLIST_QUOTE_CACHE["industry"].get(sector)
+    return sector, chg
+
+
+def _quote_for_symbol(symbol: str) -> dict[str, Any]:
+    """为自选标的组装名称、涨跌幅与对应日期。"""
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.market import BarInterval
+
+    code = symbol.split(".")[0].strip()
+    exchange = symbol.split(".")[-1].upper() if "." in symbol else ""
+    today = datetime.now().strftime("%Y-%m-%d")
+    result: dict[str, Any] = {
+        "symbol": symbol,
+        "name": get_cn_name(symbol),
+        "change_pct": None,
+        "price": None,
+        "asof_date": today,
+        "quote_source": "none",
+    }
+
+    def _from_local() -> dict[str, Any]:
+        settings = Settings.load()
+        store = DataStore(settings.data.parquet_dir)
+        bars = store.load_bars(InstrumentId.from_str(symbol), BarInterval.DAILY)
+        by_day: dict[str, Any] = {}
+        for b in bars:
+            by_day[b.timestamp.strftime("%Y-%m-%d")] = b
+        uniq = [by_day[k] for k in sorted(by_day)]
+        if len(uniq) >= 2:
+            prev, last = float(uniq[-2].close), float(uniq[-1].close)
+            if prev:
+                result["change_pct"] = round((last - prev) / prev * 100, 2)
+                result["price"] = last
+                result["quote_source"] = "local"
+                result["asof_date"] = uniq[-1].timestamp.strftime("%Y-%m-%d")
+        elif len(uniq) == 1:
+            result["price"] = float(uniq[-1].close)
+            result["quote_source"] = "local"
+            result["asof_date"] = uniq[-1].timestamp.strftime("%Y-%m-%d")
+            result["change_pct"] = None
+        return result
+
+    # 场外基金直接用本地净值，避免拉全市场实时行情拖慢接口
+    if exchange == "OTC":
+        try:
+            return _from_local()
+        except Exception:
+            return result
+
+    _refresh_quote_cache()
+    spot = _WATCHLIST_QUOTE_CACHE["spot"]
+    etf = _WATCHLIST_QUOTE_CACHE["etf"]
+
+    if code in spot:
+        result["change_pct"] = spot[code]["change_pct"]
+        result["price"] = spot[code]["price"]
+        if spot[code].get("name") and not result["name"]:
+            result["name"] = spot[code]["name"]
+        result["quote_source"] = "spot"
+        result["asof_date"] = today
+        return result
+
+    if code in etf:
+        result["change_pct"] = etf[code]["change_pct"]
+        if etf[code].get("name") and not result["name"]:
+            result["name"] = etf[code]["name"]
+        result["quote_source"] = "etf"
+        result["asof_date"] = today
+        return result
+
+    if exchange in ("SSE", "SZSE", "NASDAQ", "NYSE", "SHFE", "DCE", "CZCE", "CFFEX"):
+        try:
+            return _from_local()
+        except Exception:
+            pass
+    return result
+
+
+@app.get("/api/watchlist")
+async def watchlist_get():
+    """获取自选列表（含中文名、当日涨跌及日期）。"""
+    symbols = _load_watchlist()
+    items = [_quote_for_symbol(s) for s in symbols]
+    return {"items": items, "count": len(items)}
+
+
+@app.post("/api/watchlist")
+async def watchlist_add(body: dict[str, Any]):
+    """添加自选。body: {\"symbol\": \"161725.OTC\"}"""
+    raw = (body.get("symbol") or "").strip()
+    if not raw or "." not in raw:
+        raise HTTPException(status_code=400, detail="需要标的代码，如 161725.OTC")
+    code, exchange = raw.rsplit(".", 1)
+    symbol = f"{code.strip()}.{exchange.strip().upper()}"
+    symbols = _load_watchlist()
+    if symbol not in symbols:
+        symbols.append(symbol)
+        _save_watchlist(symbols)
+    item = _quote_for_symbol(symbol)
+    return {"status": "ok", **item, "count": len(symbols)}
+
+
+@app.delete("/api/watchlist/{symbol}")
+async def watchlist_remove(symbol: str):
+    """移除自选。"""
+    symbols = _load_watchlist()
+    symbols = [s for s in symbols if s != symbol]
+    _save_watchlist(symbols)
+    return {"status": "ok", "count": len(symbols)}
+
+
 def _serialize_account(account: Any) -> dict:
     return {
         "account_id": account.account_id,
@@ -1014,8 +1338,10 @@ def _serialize_account(account: Any) -> dict:
 
 
 def _serialize_position(pos: Any) -> dict:
+    sym = str(pos.instrument_id)
     return {
-        "instrument_id": str(pos.instrument_id),
+        "instrument_id": sym,
+        "name": get_cn_name(sym),
         "quantity": pos.quantity,
         "avg_price": float(pos.avg_cost),
         "realized_pnl": float(pos.realized_pnl),
