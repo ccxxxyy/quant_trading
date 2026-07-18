@@ -27,7 +27,7 @@ class FactorStrategy(BaseStrategy):
         params = params or {}
         params.setdefault("rebalance_interval", 20)
         params.setdefault("top_n", 10)
-        params.setdefault("quantity_per_position", 100)
+        params.setdefault("quantity_per_position", 10)
         super().__init__(params=params, **kwargs)
         self._bar_count = 0
         self._universe: list[InstrumentId] = []

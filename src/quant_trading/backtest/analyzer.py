@@ -69,7 +69,12 @@ class BacktestAnalyzer:
             return PerformanceMetrics(initial_capital=initial_capital)
 
         timestamps, values = zip(*equity_curve)
-        df = pl.DataFrame({"timestamp": list(timestamps), "equity": list(values)})
+        df = pl.DataFrame(
+            {
+                "timestamp": list(timestamps),
+                "equity": [float(v) for v in values],
+            }
+        )
 
         returns = df.select(pl.col("equity").pct_change().alias("return")).drop_nulls()
         returns_list = returns["return"].to_list()
