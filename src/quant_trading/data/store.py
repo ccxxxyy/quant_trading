@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -113,7 +114,8 @@ class DataStore:
             if end:
                 df = df.filter(ts_col <= end)
 
-        df = df.sort("timestamp")
+        # 多次获取可能产生同日重复行，保留最后一条
+        df = df.unique(subset=["timestamp"], keep="last").sort("timestamp")
 
         bars = []
         for row in df.iter_rows(named=True):
@@ -388,8 +390,28 @@ class DataStore:
             if exchange_dir.is_dir():
                 for symbol_dir in exchange_dir.iterdir():
                     if symbol_dir.is_dir():
-                        instruments.append(f"{symbol_dir.name}.{exchange_dir.name}")
-        return sorted(instruments)
+                        # strip 防止历史脏数据（如 " 161725"）
+                        instruments.append(f"{symbol_dir.name.strip()}.{exchange_dir.name}")
+        return sorted(set(instruments))
+
+    def delete_instrument(self, instrument_id: InstrumentId) -> bool:
+        """删除本地某标的全部行情数据。"""
+        path = self._base_dir / instrument_id.exchange.value / instrument_id.symbol
+        removed = False
+        if path.exists() and path.is_dir():
+            shutil.rmtree(path)
+            removed = True
+        # 兼容历史脏目录名（前导空格等）
+        parent = self._base_dir / instrument_id.exchange.value
+        if parent.exists():
+            for d in parent.iterdir():
+                if d.is_dir() and d.name.strip() == instrument_id.symbol:
+                    shutil.rmtree(d)
+                    removed = True
+        # 清理空交易所目录
+        if parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+        return removed
 
     def close(self) -> None:
         if self._conn:

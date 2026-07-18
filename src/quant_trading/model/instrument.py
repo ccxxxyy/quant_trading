@@ -52,10 +52,10 @@ class InstrumentId:
 
     @classmethod
     def from_str(cls, s: str) -> InstrumentId:
-        parts = s.rsplit(".", 1)
+        parts = s.strip().rsplit(".", 1)
         if len(parts) != 2:
             raise ValueError(f"Invalid instrument id: {s}, expected 'SYMBOL.EXCHANGE'")
-        return cls(symbol=parts[0], exchange=Exchange(parts[1]))
+        return cls(symbol=parts[0].strip(), exchange=Exchange(parts[1].strip().upper()))
 
 
 @dataclass(frozen=True, slots=True)

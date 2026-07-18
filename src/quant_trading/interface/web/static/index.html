@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=12" />
+  <link rel="stylesheet" href="/static/css/style.css?v=14" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -100,6 +100,21 @@
             <div class="kpi-desc">可接入的交易所数量（A股/美股/期货）</div>
           </div>
         </div>
+        <div class="panel" style="margin-bottom:0.6rem">
+          <div class="panel-header">
+            <h3>自选列表</h3>
+            <span class="badge" id="watchlist-count">0</span>
+          </div>
+          <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.4rem;color:var(--text-muted)">
+            「当日涨幅」及对应日期；约每分钟刷新。可在数据管理「已存储标的」一键加入。
+          </p>
+          <div style="display:flex;gap:0.4rem;margin-bottom:0.4rem">
+            <input type="text" id="watchlist-input" placeholder="如 161725.OTC / 510300.SSE"
+                   style="flex:1;padding:0.35rem 0.5rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem" />
+            <button class="btn btn-sm btn-primary" id="watchlist-add-btn">加入自选</button>
+          </div>
+          <div id="watchlist-list" class="watchlist-list"></div>
+        </div>
         <div class="panel-grid">
           <div class="panel">
             <div class="panel-header">
@@ -113,7 +128,7 @@
               <h3>数据获取</h3>
               <button class="btn btn-sm btn-primary" onclick="navigateTo('data')">管理数据</button>
             </div>
-            <p class="panel-text">通过 AkShare / yfinance 拉取 A 股、美股、期货历史行情，自动存储为 Parquet 格式。</p>
+            <p class="panel-text">通过 AkShare / yfinance 拉取 A 股、美股、期货、场外基金历史行情，自动存储为 Parquet 格式。</p>
           </div>
         </div>
         <div class="panel">
@@ -156,13 +171,14 @@
                 <div>
                   <label>数据源</label>
                   <select name="provider">
-                    <option value="akshare">AkShare (A股/期货/指数/可转债)</option>
+                    <option value="akshare">AkShare (A股/期货/指数/可转债/场外基金)</option>
                     <option value="yfinance">yfinance (美股)</option>
                   </select>
                 </div>
               </div>
               <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.5rem;color:var(--text-muted)">
-                标的代码示例：股票 600519.SSE / ETF 510300.SSE / 指数 000300.SSE / 可转债 113050.SSE / 期货 au2412.SHFE / 场外基金 161725.OTC
+                标的代码示例：股票 600519.SSE / ETF 510300.SSE / 指数 000300.SSE / 可转债 113050.SSE / 期货 au2412.SHFE / 场外基金 161725.OTC<br/>
+                存储规则：不同「周期」分开存（日线≠分钟线）；同一周期多次获取会合并去重，全部可用，不是只留最后一次。
               </p>
               <button type="submit" class="btn btn-primary btn-block">获取并存储</button>
             </form>
@@ -172,7 +188,21 @@
               <h3>已存储标的</h3>
               <span class="badge" id="instrument-count">0</span>
             </div>
-            <div class="instrument-list" id="instrument-list"></div>
+            <p class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)">三栏独立滚动；点「自选」加入总览自选列表，点名称预览 K 线。</p>
+            <div class="instrument-tri">
+              <div class="instrument-col">
+                <div class="instrument-group-label">美股 <span id="count-us">0</span></div>
+                <div class="instrument-list" id="instrument-list-us"></div>
+              </div>
+              <div class="instrument-col">
+                <div class="instrument-group-label">场外基金 <span id="count-fund">0</span></div>
+                <div class="instrument-list" id="instrument-list-fund"></div>
+              </div>
+              <div class="instrument-col">
+                <div class="instrument-group-label">A股 / 场内 / 期货 <span id="count-other">0</span></div>
+                <div class="instrument-list" id="instrument-list-other"></div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="panel">
@@ -225,7 +255,7 @@
                 <select name="strategy" id="strategy-select"></select>
               </div>
               <div class="form-row">
-                <label>标的代码</label>
+                <label>标的代码 <span id="bt-cn-hint" style="color:var(--primary);font-weight:400"></span></label>
                 <input type="text" name="symbol" value="600519.SSE" required />
               </div>
               <div class="form-row two-col">
@@ -590,6 +620,14 @@
 
       <!-- Paper Trading -->
       <section class="page" id="page-paper">
+        <div class="panel" style="margin-bottom:0.6rem">
+          <div class="panel-header"><h3>模拟盘能做什么</h3></div>
+          <p class="panel-text" style="font-size:0.8rem;line-height:1.55;margin:0;color:var(--text-muted)">
+            用虚拟资金买卖股票 / ETF / 场外基金 / 美股：市价立即成交、限价挂单、追踪止损、条件单；可查看持仓、挂单与成交历史。
+            成交价取自「数据管理」里该标的的最新收盘价/净值，下单前请先获取数据。
+            账户状态会自动保存到本地，重启后点「连接 / 恢复」即可继续；只有点「重置模拟盘」才会清空。
+          </p>
+        </div>
         <!-- 多账户管理 -->
         <div class="panel" style="margin-bottom:0.6rem">
           <div class="panel-header">
@@ -620,8 +658,8 @@
             <div class="panel-header"><h3>下单面板</h3></div>
             <form id="paper-order-form" class="form">
               <div class="form-row">
-                <label>标的代码</label>
-                <input type="text" name="symbol" value="600519.SSE" required />
+                <label>标的代码 <span id="paper-cn-hint" style="color:var(--primary);font-weight:400"></span></label>
+                <input type="text" name="symbol" value="600519.SSE" placeholder="600519.SSE / 161725.OTC" required />
               </div>
               <div class="form-row two-col">
                 <div>
@@ -677,8 +715,9 @@
               </div>
               <button type="submit" class="btn btn-primary btn-block">提交订单</button>
             </form>
-            <div style="margin-top:0.5rem">
-              <button class="btn btn-ghost btn-block" id="paper-connect-btn">重置模拟盘</button>
+            <div style="margin-top:0.5rem;display:flex;gap:0.4rem">
+              <button class="btn btn-primary" id="paper-connect-btn" style="flex:1">连接 / 恢复</button>
+              <button class="btn btn-ghost" id="paper-reset-btn" style="flex:1">重置模拟盘</button>
             </div>
           </div>
           <div class="panel">
@@ -699,6 +738,18 @@
             <table class="data-table" id="paper-orders-table">
               <thead>
                 <tr><th>订单号</th><th>标的</th><th>方向</th><th>类型</th><th>数量</th><th>价格</th><th>状态</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><h3>成交历史 <span id="paper-history-count" style="color:var(--muted);font-weight:400;font-size:0.75rem"></span></h3></div>
+          <div class="table-wrap" style="max-height:220px;overflow-y:auto">
+            <table class="data-table" id="paper-history-table">
+              <thead>
+                <tr><th>时间</th><th>标的</th><th>方向</th><th>数量</th><th>成交价</th><th>手续费</th></tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -1349,6 +1400,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=14"></script>
+  <script src="/static/js/app.js?v=21"></script>
 </body>
 </html>

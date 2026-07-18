@@ -525,6 +525,32 @@ class AkShareFeed(DataFeed):
     # 场外基金净值
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _to_naive_datetime(value) -> datetime | None:
+        """将 date / Timestamp / str 统一为 naive datetime，避免比较报错。"""
+        from datetime import date as date_cls
+
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None) if value.tzinfo else value
+        if isinstance(value, date_cls):
+            return datetime.combine(value, datetime.min.time())
+        if hasattr(value, "to_pydatetime"):
+            dt = value.to_pydatetime()
+            return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+        if isinstance(value, str):
+            text = value.strip().replace("/", "-")
+            try:
+                return datetime.fromisoformat(text[:19] if "T" in text or " " in text else text)
+            except ValueError:
+                for fmt in ("%Y-%m-%d", "%Y%m%d"):
+                    try:
+                        return datetime.strptime(text[:10], fmt)
+                    except ValueError:
+                        continue
+        return None
+
     async def _fetch_fund_nav(
         self,
         ak,
@@ -534,6 +560,7 @@ class AkShareFeed(DataFeed):
         instrument_id: InstrumentId,
     ) -> list[Bar]:
         """获取场外开放式基金的累计净值，转换为K线格式用于回测。"""
+        symbol = symbol.strip()
         try:
             _ensure_no_proxy()
             df = ak.fund_open_fund_info_em(symbol=symbol, indicator="累计净值走势")
@@ -544,14 +571,16 @@ class AkShareFeed(DataFeed):
         if df is None or df.empty:
             return []
 
+        start_dt = self._to_naive_datetime(start) or start
+        end_dt = self._to_naive_datetime(end) or end
+
         bars: list[Bar] = []
         for _, row in df.iterrows():
             try:
-                ts = row.iloc[0]
-                nav = row.iloc[1]
-                if isinstance(ts, str):
-                    ts = datetime.fromisoformat(ts)
-                nav_d = Decimal(str(round(float(nav), 4)))
+                ts = self._to_naive_datetime(row.iloc[0])
+                if ts is None:
+                    continue
+                nav_d = Decimal(str(round(float(row.iloc[1]), 4)))
                 bars.append(
                     Bar(
                         instrument_id=instrument_id,
@@ -568,6 +597,6 @@ class AkShareFeed(DataFeed):
                 logger.debug(f"Skipping fund row: {e}")
                 continue
 
-        bars = [b for b in bars if start <= b.timestamp <= end]
+        bars = [b for b in bars if start_dt <= b.timestamp <= end_dt]
         logger.info(f"Fetched {len(bars)} fund NAV for {instrument_id}")
         return bars

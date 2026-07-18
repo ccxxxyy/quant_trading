@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 from quant_trading.gateway.base import BaseGateway
 from quant_trading.model.account import Account
@@ -14,32 +16,40 @@ from quant_trading.model.position import Position
 
 logger = logging.getLogger(__name__)
 
+_PERSIST_DIR = Path("data/paper_trading")
+
 
 class PaperTradingGateway(BaseGateway):
     """模拟盘交易网关，使用真实行情数据在虚拟环境中执行交易。
 
     适合在实盘之前验证策略的实际表现。
+    数据会持久化到磁盘，重启后自动恢复订单/持仓/资金状态。
     """
 
     def __init__(
         self,
-        initial_capital: float = 1_000_000.0,
+        initial_capital: float = 100_000.0,
         commission_rate: float = 0.0003,
         slippage_rate: float = 0.0001,
+        account_name: str = "default",
     ) -> None:
         super().__init__(name="paper")
+        self._account_name = account_name
+        self._initial_capital = initial_capital
         self._commission_rate = Decimal(str(commission_rate))
         self._slippage_rate = Decimal(str(slippage_rate))
         self._account = Account(
-            account_id="paper",
+            account_id=account_name,
             currency=Currency.CNY,
             balance=Decimal(str(initial_capital)),
             available=Decimal(str(initial_capital)),
         )
         self._positions: dict[str, Position] = {}
         self._pending_orders: list[Order] = []
+        self._order_history: list[dict] = []
         self._latest_prices: dict[str, Decimal] = {}
         self._trailing_best: dict[str, Decimal] = {}
+        self._load_state()
 
     async def connect(self) -> None:
         self._connected = True
@@ -69,8 +79,10 @@ class PaperTradingGateway(BaseGateway):
                 self._execute_fill(order, fill_price)
             else:
                 self._pending_orders.append(order)
+                self._save_state()
         else:
             self._pending_orders.append(order)
+            self._save_state()
 
         return order.order_id
 
@@ -79,6 +91,7 @@ class PaperTradingGateway(BaseGateway):
             if order.order_id == order_id:
                 order.status = OrderStatus.CANCELLED
                 self._pending_orders.remove(order)
+                self._save_state()
                 return True
         return False
 
@@ -185,12 +198,155 @@ class PaperTradingGateway(BaseGateway):
             self._account.available += price * order.quantity - commission
         self._account.commission += commission
 
-        # 通知回调
+        self._order_history.append(
+            {
+                "order_id": order.order_id,
+                "instrument_id": str(order.instrument_id),
+                "side": order.side.value,
+                "order_type": order.order_type.value,
+                "quantity": int(order.quantity),
+                "price": float(price),
+                "commission": float(commission),
+                "status": order.status.value,
+                "timestamp": fill.timestamp.isoformat(),
+            }
+        )
+
         if self._on_fill:
             self._on_fill(fill)
+
+        self._save_state()
 
     def _apply_slippage(self, price: Decimal, side: OrderSide) -> Decimal:
         slippage = price * self._slippage_rate
         if side == OrderSide.BUY:
             return price + slippage
         return price - slippage
+
+    # ── 持久化 ──────────────────────────────────────────────
+
+    @property
+    def _state_file(self) -> Path:
+        return _PERSIST_DIR / f"{self._account_name}.json"
+
+    def _save_state(self) -> None:
+        """将账户/持仓/订单历史写入 JSON 文件。"""
+        _PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+        positions = {}
+        for k, p in self._positions.items():
+            if not p.is_flat:
+                positions[k] = {
+                    "quantity": int(p.quantity),
+                    "avg_cost": float(p.avg_cost),
+                    "realized_pnl": float(p.realized_pnl),
+                }
+        pending = [
+            {
+                "order_id": o.order_id,
+                "instrument_id": str(o.instrument_id),
+                "side": o.side.value,
+                "order_type": o.order_type.value,
+                "quantity": int(o.quantity),
+                "price": float(o.price) if o.price else 0,
+                "stop_price": float(o.stop_price) if o.stop_price else 0,
+                "condition_expr": o.condition_expr or "",
+            }
+            for o in self._pending_orders
+        ]
+        state = {
+            "account": {
+                "balance": float(self._account.balance),
+                "available": float(self._account.available),
+                "commission": float(self._account.commission),
+            },
+            "positions": positions,
+            "pending_orders": pending,
+            "order_history": self._order_history[-500:],
+            "latest_prices": {k: float(v) for k, v in self._latest_prices.items()},
+        }
+        self._state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
+    def _load_state(self) -> None:
+        """从磁盘恢复状态。"""
+        if not self._state_file.exists():
+            return
+        try:
+            state = json.loads(self._state_file.read_text())
+            acc = state.get("account", {})
+            self._account.balance = Decimal(str(acc.get("balance", self._initial_capital)))
+            self._account.available = Decimal(str(acc.get("available", self._initial_capital)))
+            self._account.commission = Decimal(str(acc.get("commission", 0)))
+
+            for sym, pdata in state.get("positions", {}).items():
+                iid = InstrumentId.from_str(sym)
+                pos = Position(instrument_id=iid)
+                qty = pdata["quantity"]
+                cost = Decimal(str(pdata["avg_cost"]))
+                if qty > 0:
+                    fake_fill = Fill(
+                        order_id="restore",
+                        instrument_id=iid,
+                        side=OrderSide.BUY,
+                        price=cost,
+                        quantity=abs(qty),
+                        commission=Decimal(0),
+                        timestamp=datetime.now(),
+                    )
+                    pos.apply_fill(fake_fill)
+                elif qty < 0:
+                    fake_fill = Fill(
+                        order_id="restore",
+                        instrument_id=iid,
+                        side=OrderSide.SELL,
+                        price=cost,
+                        quantity=abs(qty),
+                        commission=Decimal(0),
+                        timestamp=datetime.now(),
+                    )
+                    pos.apply_fill(fake_fill)
+                pos.realized_pnl = Decimal(str(pdata.get("realized_pnl", 0)))
+                self._positions[sym] = pos
+
+            for pod in state.get("pending_orders", []):
+                o = Order(
+                    instrument_id=InstrumentId.from_str(pod["instrument_id"]),
+                    side=OrderSide.BUY if pod["side"] == "buy" else OrderSide.SELL,
+                    order_type=OrderType(pod["order_type"]),
+                    quantity=pod["quantity"],
+                    price=Decimal(str(pod.get("price", 0))),
+                )
+                o.order_id = pod.get("order_id", o.order_id)
+                o.status = OrderStatus.SUBMITTED
+                if pod.get("stop_price"):
+                    o.stop_price = Decimal(str(pod["stop_price"]))
+                if pod.get("condition_expr"):
+                    o.condition_expr = pod["condition_expr"]
+                self._pending_orders.append(o)
+
+            self._order_history = state.get("order_history", [])
+            for sym, px in state.get("latest_prices", {}).items():
+                self._latest_prices[sym] = Decimal(str(px))
+
+            logger.info(
+                f"Restored paper account '{self._account_name}': "
+                f"balance={self._account.balance}, "
+                f"{len(self._positions)} positions, "
+                f"{len(self._pending_orders)} pending, "
+                f"{len(self._order_history)} historical orders"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load paper state: {e}")
+
+    def reset(self) -> None:
+        """重置账户到初始状态并清除持久化文件。"""
+        self._account.balance = Decimal(str(self._initial_capital))
+        self._account.available = Decimal(str(self._initial_capital))
+        self._account.commission = Decimal(0)
+        self._positions.clear()
+        self._pending_orders.clear()
+        self._order_history.clear()
+        self._latest_prices.clear()
+        self._trailing_best.clear()
+        if self._state_file.exists():
+            self._state_file.unlink()
+        logger.info(f"Paper account '{self._account_name}' reset")
