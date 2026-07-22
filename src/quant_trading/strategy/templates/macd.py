@@ -39,7 +39,7 @@ class MACDStrategy(BarSeriesStrategy):
         params.setdefault("fast_period", 12)
         params.setdefault("slow_period", 26)
         params.setdefault("signal_period", 9)
-        params.setdefault("quantity", 100)
+        params.setdefault("quantity", 10)
         super().__init__(strategy_id="MACD", params=params, **kwargs)
         self._instrument_id: InstrumentId | None = None
         self._ema_fast: Decimal | None = None

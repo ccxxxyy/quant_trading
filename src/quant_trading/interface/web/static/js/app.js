@@ -197,6 +197,7 @@ function _candlestickConfig(bars, chartId, tradeMarkers) {
   const pad = Math.max(span * 0.12, Math.abs(mid) * 0.02, 0.02);
   const eps = Math.max(span * 0.015, Math.abs(mid) * 0.003, 0.005);
 
+  // 场外净值 OHLC 常相等：实体用最小高度，仍画蜡烛（十字星形态），不再改成折线
   const buyPoints = new Array(labels.length).fill(null);
   const sellPoints = new Array(labels.length).fill(null);
   if (tradeMarkers) {
@@ -523,8 +524,9 @@ async function previewBars(symbol, activeEl, startDate, endDate) {
       if (parent) parent.querySelector(".empty-hint")?.remove();
       renderPriceChart(data.bars);
     }
-  } catch {
+  } catch (err) {
     renderPriceChart([]);
+    toast(err?.message || "加载 K 线失败", "error");
   }
 }
 
@@ -601,22 +603,36 @@ document.getElementById("fetch-form").addEventListener("submit", async (e) => {
 
 function renderStrategyParams(strategyId) {
   const container = document.getElementById("strategy-params");
+  const hint = document.getElementById("strategy-params-hint");
   const meta = strategiesMeta[strategyId];
   if (!meta?.params) {
     container.innerHTML = "";
+    if (hint) hint.style.display = "none";
     return;
   }
+
+  const help = {
+    fast_period: "用最近 N 个交易日收盘价算快均线（越小越灵敏）",
+    slow_period: "用最近 N 个交易日收盘价算慢均线（须 > 快线）",
+    quantity: "每次金叉/死叉买卖的股数或基金份额",
+  };
 
   container.innerHTML = Object.entries(meta.params)
     .map(([key, spec]) => `
       <div class="form-row">
-        <label>${spec.label || key}</label>
-        <input type="${spec.type === 'float' ? 'number' : spec.type === 'int' ? 'number' : 'text'}"
+        <label title="${help[key] || ""}">${spec.label || key}</label>
+        <input type="${spec.type === "float" ? "number" : spec.type === "int" ? "number" : "text"}"
                name="param_${key}"
-               value="${spec.default ?? ''}"
-               step="${spec.type === 'float' ? '0.1' : '1'}" />
+               value="${spec.default ?? ""}"
+               step="${spec.type === "float" ? "0.1" : "1"}"
+               title="${help[key] || ""}" />
       </div>`)
     .join("");
+
+  if (hint) {
+    const show = strategyId === "dual_ma" || (meta.params.fast_period && meta.params.slow_period);
+    hint.style.display = show ? "" : "none";
+  }
 }
 
 function populateStrategySelect() {
@@ -663,10 +679,17 @@ function updateMetrics(metrics) {
   alignBacktestPanels();
 }
 
+function _sideCn(side) {
+  const s = (side || "").toLowerCase();
+  if (s === "long" || s === "buy") return "买入/做多";
+  if (s === "short" || s === "sell") return "卖出/做空";
+  return side || "-";
+}
+
 function updateTradesTable(trades) {
   const tbody = document.querySelector("#trades-table tbody");
   if (!trades?.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无交易记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无交易记录（该时段策略未触发买卖信号）</td></tr>';
     return;
   }
 
@@ -675,7 +698,7 @@ function updateTradesTable(trades) {
       const pnlClass = t.pnl >= 0 ? "positive" : "negative";
       return `<tr>
         <td>${t.instrument_id}</td>
-        <td>${t.side}</td>
+        <td>${_sideCn(t.side)}</td>
         <td>${t.entry_time?.slice(0, 10)} @ ${fmtNum(t.entry_price)}</td>
         <td>${t.exit_time?.slice(0, 10)} @ ${fmtNum(t.exit_price)}</td>
         <td>${t.quantity}</td>
@@ -852,7 +875,7 @@ function renderKlineWithTrades(equityCurve, trades, openPositions) {
   destroyChart("kline-trades-chart");
   const emptyEl = document.getElementById("kline-trades-empty");
   const ctx = document.getElementById("kline-trades-chart");
-  if (!ctx || !equityCurve?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
+  if (!ctx || !bars?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
   if (emptyEl) emptyEl.style.display = "none";
 
   const labels = equityCurve.map(p => p.timestamp?.slice(0, 10) || "");
@@ -1472,7 +1495,7 @@ function updatePaperPositions(positions) {
       const code = (p.instrument_id || "").split(".")[0];
       const cn = p.name || _cnNameMap[p.instrument_id] || _STATIC_CN_NAMES_JS[code] || "";
       const label = cn ? `${cn} ${p.instrument_id}` : p.instrument_id;
-      const sideLabel = p.side === "long" ? "多" : p.side === "short" ? "空" : p.side;
+      const sideLabel = _sideCn(p.side);
       return `<tr>
         <td>${label}</td>
         <td>${sideLabel}</td>

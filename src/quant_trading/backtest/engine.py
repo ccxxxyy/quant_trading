@@ -211,7 +211,7 @@ class BacktestEngine:
         """处理成交回报 - 更新持仓、账户资金、记录交易。"""
         self._fills.append(fill)
 
-        # 平仓前快照入场信息（apply_fill 后均价会被清零）
+        # 更新持仓（平仓前先快照入场信息，apply_fill 后均价/开仓时间会被清零）
         position = self.get_position(fill.instrument_id)
         prev_quantity = position.quantity
         entry_time = position.opened_at
@@ -230,7 +230,7 @@ class BacktestEngine:
 
         self._account.commission += fill.commission
 
-        # 完全平仓时记录本回合交易（盈亏用增量，非累计）
+        # 如果持仓完全平仓，记录一笔完整交易（盈亏取本回合增量，非累计）
         if prev_quantity != 0 and position.quantity == 0:
             pnl = float(position.realized_pnl - realized_before)
             commission = float(position.commission - commission_before)
