@@ -26,7 +26,7 @@ class DualMovingAverageStrategy(BarSeriesStrategy):
         params = params or {}
         params.setdefault("fast_period", 10)
         params.setdefault("slow_period", 30)
-        params.setdefault("quantity", 10)
+        params.setdefault("quantity", 60)
         super().__init__(strategy_id="DualMA", params=params, **kwargs)
         self._instrument_id: InstrumentId | None = None
         self._prev_fast_ma: Decimal | None = None
@@ -93,7 +93,7 @@ class BollingerBandStrategy(BarSeriesStrategy):
         params = params or {}
         params.setdefault("period", 20)
         params.setdefault("num_std", 2.0)
-        params.setdefault("quantity", 10)
+        params.setdefault("quantity", 60)
         super().__init__(strategy_id="BollingerBand", params=params, **kwargs)
 
     def on_init(self) -> None:

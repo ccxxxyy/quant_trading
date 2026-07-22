@@ -43,7 +43,7 @@ def create_parser() -> argparse.ArgumentParser:
     bt_parser.add_argument("--symbol", required=True, help="标的代码")
     bt_parser.add_argument("--start", required=True, help="起始日期")
     bt_parser.add_argument("--end", help="结束日期")
-    bt_parser.add_argument("--capital", type=float, default=1_000_000, help="初始资金")
+    bt_parser.add_argument("--capital", type=float, default=5_000, help="初始资金")
     bt_parser.add_argument("--params", help="策略参数（key=value 格式，逗号分隔）")
 
     # 系统信息命令

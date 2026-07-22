@@ -71,10 +71,13 @@ function alignBacktestPanels() {
   if (panels.length < 2) return;
   const [left, right] = panels;
   left.style.height = "";
+  left.style.maxHeight = "";
   requestAnimationFrame(() => {
     const rh = Math.round(right.getBoundingClientRect().height);
     if (rh < 120) return;
     left.style.height = `${rh}px`;
+    left.style.maxHeight = `${rh}px`;
+    left.style.overflow = "hidden";
   });
 }
 
@@ -363,8 +366,24 @@ function updateDashboard() {
   document.getElementById("kpi-exchanges").textContent = systemInfo.exchanges.length;
   document.getElementById("version-badge").textContent = `v${systemInfo.version}`;
 
+  const dashTitle = document.getElementById("dashboard-equity-title");
   if (lastBacktestResult?.equity_curve) {
-    renderEquityChart("dashboard-equity-chart", lastBacktestResult.equity_curve);
+    const formSym = document.querySelector('#backtest-form [name="symbol"]')?.value?.trim() || "";
+    const sym = lastBacktestResult.symbol || formSym;
+    const cn = (_cnNameMap && sym && _cnNameMap[sym])
+      || document.getElementById("bt-cn-hint")?.textContent?.trim()
+      || "";
+    const stratId = lastBacktestResult.strategy
+      || document.querySelector('#backtest-form [name="strategy"]')?.value
+      || "";
+    const stratName = (strategiesMeta?.[stratId]?.name) || stratId;
+    const label = cn ? `${cn}（${sym}）` : (sym || "未知标的");
+    if (dashTitle) {
+      dashTitle.textContent = `最近回测权益曲线 · ${label}${stratName ? ` · ${stratName}` : ""}`;
+    }
+    renderEquityChart("dashboard-equity-chart", lastBacktestResult.equity_curve, label);
+  } else if (dashTitle) {
+    dashTitle.textContent = "最近回测权益曲线";
   }
 }
 
@@ -445,7 +464,8 @@ function _bindInstrumentList(listEl) {
   });
 }
 
-async function loadInstruments(focusSymbol) {
+async function loadInstruments(focusSymbol, options = {}) {
+  const { skipPreview = false, previewStart = null, previewEnd = null } = options;
   const data = await api("/data/instruments");
   const countEl = document.getElementById("instrument-count");
   if (countEl) countEl.textContent = data.count;
@@ -488,16 +508,21 @@ async function loadInstruments(focusSymbol) {
     }
   }
 
+  if (skipPreview) return;
+
   const allSyms = data.instruments || [];
   const target = focusSymbol && allSyms.includes(focusSymbol)
     ? focusSymbol
     : allSyms[0];
-  if (target) previewBars(target);
+  if (target) await previewBars(target, null, previewStart, previewEnd);
 }
 
 async function previewBars(symbol, activeEl, startDate, endDate) {
   document.querySelectorAll(".instrument-item").forEach((el) => el.classList.remove("active"));
   if (activeEl) activeEl.classList.add("active");
+
+  const rangeEl = document.getElementById("price-chart-range");
+  if (rangeEl) rangeEl.textContent = "";
 
   try {
     let url = `/data/bars/${encodeURIComponent(symbol)}`;
@@ -523,6 +548,14 @@ async function previewBars(symbol, activeEl, startDate, endDate) {
       const parent = document.getElementById("price-chart")?.parentElement;
       if (parent) parent.querySelector(".empty-hint")?.remove();
       renderPriceChart(data.bars);
+      if (rangeEl && data.bars.length) {
+        const a = (data.bars[0].timestamp || "").slice(0, 10);
+        const b = (data.bars[data.bars.length - 1].timestamp || "").slice(0, 10);
+        const scope = startDate || endDate
+          ? `本次筛选 ${startDate || "…"} ~ ${endDate || "…"}`
+          : "本地已存全部历史";
+        rangeEl.textContent = `${symbol} · ${a} ~ ${b} · ${data.bars.length} 根 · ${scope}`;
+      }
     }
   } catch (err) {
     renderPriceChart([]);
@@ -589,8 +622,11 @@ document.getElementById("fetch-form").addEventListener("submit", async (e) => {
     } else {
       toast(`成功获取 ${count} 条 K 线: ${result.symbol}`, "success");
     }
-    await loadInstruments(result.symbol);
-    previewBars(result.symbol, null, fetchStart, fetchEnd);
+    // 避免 loadInstruments 默认全历史预览覆盖「本次获取区间」
+    await loadInstruments(result.symbol, {
+      skipPreview: true,
+    });
+    await previewBars(result.symbol, null, fetchStart, fetchEnd);
     await refreshSystemInfo();
   } catch (err) {
     toast(err.message, "error");
@@ -741,6 +777,8 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     });
 
     lastBacktestResult = result;
+    const btHint = document.getElementById("bt-cn-hint")?.textContent?.trim();
+    if (result.symbol && btHint) _cnNameMap[result.symbol] = btHint;
     updateMetrics(result.metrics);
     renderEquityChart("equity-chart", result.equity_curve);
     renderDrawdownChart(result.equity_curve);
@@ -875,7 +913,7 @@ function renderKlineWithTrades(equityCurve, trades, openPositions) {
   destroyChart("kline-trades-chart");
   const emptyEl = document.getElementById("kline-trades-empty");
   const ctx = document.getElementById("kline-trades-chart");
-  if (!ctx || !bars?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
+  if (!ctx || !equityCurve?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
   if (emptyEl) emptyEl.style.display = "none";
 
   const labels = equityCurve.map(p => p.timestamp?.slice(0, 10) || "");
@@ -1129,12 +1167,13 @@ document.getElementById("run-compare-btn").addEventListener("click", async () =>
   const start = document.querySelector('#backtest-form [name="start"]').value || fallbackStart;
   const end = document.querySelector('#backtest-form [name="end"]').value || null;
   const capital = Number(document.querySelector('#backtest-form [name="capital"]').value) || 100000;
+  const useDemo = document.querySelector('#backtest-form [name="use_demo_data"]')?.checked === true;
 
   showLoading(true);
   try {
     const data = await api("/backtest/compare", {
       method: "POST",
-      body: JSON.stringify({ strategy: "dual_ma", symbol, start, end, capital, use_demo_data: true }),
+      body: JSON.stringify({ strategy: "dual_ma", symbol, start, end, capital, use_demo_data: useDemo }),
     });
 
     renderCompareChart(data.results);

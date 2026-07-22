@@ -32,7 +32,7 @@ class RiskConfig(BaseModel):
 class BacktestConfig(BaseModel):
     default_commission: float = Field(default=0.0003, ge=0)
     default_slippage: float = Field(default=0.0001, ge=0)
-    initial_capital: float = Field(default=100_000.0, gt=0)
+    initial_capital: float = Field(default=5_000.0, gt=0)
 
 
 class Settings(BaseModel):

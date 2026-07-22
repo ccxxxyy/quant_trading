@@ -37,7 +37,7 @@ class RSIReversionStrategy(BarSeriesStrategy):
         params.setdefault("overbought", 70)
         params.setdefault("exit_low", 50)
         params.setdefault("exit_high", 50)
-        params.setdefault("quantity", 10)
+        params.setdefault("quantity", 60)
         super().__init__(strategy_id="RSIReversion", params=params, **kwargs)
         self._instrument_id: InstrumentId | None = None
 

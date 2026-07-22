@@ -63,7 +63,7 @@ class StrategyOptimizer:
         start: datetime,
         end: datetime | None = None,
         capital: float = 1_000_000.0,
-        use_demo_data: bool = True,
+        use_demo_data: bool = False,
     ) -> None:
         self._strategy_id = strategy_id
         self._symbol = symbol

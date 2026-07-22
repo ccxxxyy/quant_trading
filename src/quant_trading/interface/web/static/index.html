@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=20" />
+  <link rel="stylesheet" href="/static/css/style.css?v=25" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -135,7 +135,7 @@
           </div>
         </div>
         <div class="panel">
-          <div class="panel-header"><h3>最近回测权益曲线</h3></div>
+          <div class="panel-header"><h3 id="dashboard-equity-title">最近回测权益曲线</h3></div>
           <div class="chart-wrap"><canvas id="dashboard-equity-chart"></canvas></div>
         </div>
       </section>
@@ -179,10 +179,6 @@
                   </select>
                 </div>
               </div>
-              <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.5rem;color:var(--text-muted)">
-                标的代码示例：股票 600519.SSE / ETF 510300.SSE / 指数 000300.SSE / 可转债 113050.SSE / 期货 au2412.SHFE / 场外基金 161725.OTC<br/>
-                存储规则：不同「周期」分开存（日线≠分钟线）；同一周期多次获取会合并去重，全部可用，不是只留最后一次。
-              </p>
               <button type="submit" class="btn btn-primary btn-block">获取并存储</button>
             </form>
           </div>
@@ -191,7 +187,6 @@
               <h3>已存储标的</h3>
               <span class="badge" id="instrument-count">0</span>
             </div>
-            <p class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)">三栏：美股 / 场外基金 / 国内（A股·场内·期货上下分）；点「自选」加入总览，点名称预览 K 线。</p>
             <div class="instrument-tri">
               <div class="instrument-col">
                 <div class="instrument-group-label">美股 <span id="count-us">0</span></div>
@@ -220,6 +215,7 @@
         </div>
         <div class="panel">
           <div class="panel-header"><h3>K 线预览</h3></div>
+          <div id="price-chart-range" class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)"></div>
           <div class="chart-wrap tall"><canvas id="price-chart"></canvas></div>
         </div>
         <!-- 数据目录 + SQL 查询 -->
@@ -283,7 +279,7 @@
               </div>
               <div class="form-row">
                 <label>初始资金（元）</label>
-                <input type="number" name="capital" value="100000" min="1" step="1" placeholder="可输入任意金额，如 500" />
+                <input type="number" name="capital" value="5000" min="1" step="1" placeholder="可输入任意金额，如 500" />
               </div>
               <div id="strategy-params" class="strategy-params"></div>
               <p id="strategy-params-hint" class="panel-text" style="font-size:0.72rem;color:var(--text-muted);margin:0">
@@ -314,7 +310,7 @@
                 <small style="color:var(--text-muted);font-size:0.75rem">2022年起沪深统一为万分之0.2，买卖双向收取</small>
               </div>
               <label class="checkbox-label">
-                <input type="checkbox" name="use_demo_data" checked />
+                <input type="checkbox" name="use_demo_data" />
                 无本地数据时使用模拟数据（演示模式）
               </label>
               <button type="submit" class="btn btn-primary btn-block">运行回测</button>
@@ -541,7 +537,7 @@
                 <p style="font-size:0.8rem;color:var(--text-muted)">选择策略后自动生成参数搜索范围</p>
               </div>
               <label class="checkbox-label">
-                <input type="checkbox" name="use_demo_data" checked />
+                <input type="checkbox" name="use_demo_data" />
                 使用演示数据
               </label>
               <button type="submit" class="btn btn-primary btn-block">开始优化</button>
@@ -1444,6 +1440,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=35"></script>
+  <script src="/static/js/app.js?v=39"></script>
 </body>
 </html>

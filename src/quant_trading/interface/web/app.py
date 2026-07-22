@@ -537,7 +537,7 @@ async def backtest_compare(req: BacktestRequest):
                     start=start,
                     end=end,
                     capital=req.capital,
-                    use_demo_data=True,
+                    use_demo_data=req.use_demo_data,
                 )
                 results[sid] = result
             except Exception:
@@ -1644,6 +1644,24 @@ async def alpha_features():
     return {"features": features, "count": len(features)}
 
 
+def _json_safe_feature_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把特征行里的 NaN/Inf/datetime 转成 JSON 可序列化值。"""
+    import math
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        clean: dict[str, Any] = {}
+        for key, val in row.items():
+            if key == "timestamp":
+                clean[key] = str(val)
+            elif isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                clean[key] = None
+            else:
+                clean[key] = val
+        out.append(clean)
+    return out
+
+
 @app.post("/api/alpha/compute")
 async def alpha_compute(symbol: str = "DEMO.SSE"):
     """对指定标的计算全部 AI 特征。"""
@@ -1681,10 +1699,7 @@ async def alpha_compute(symbol: str = "DEMO.SSE"):
     result_df = engine.compute_features(df)
 
     tail = result_df.tail(20)
-    rows = tail.to_dicts()
-    for row in rows:
-        if "timestamp" in row:
-            row["timestamp"] = str(row["timestamp"])
+    rows = _json_safe_feature_rows(tail.to_dicts())
 
     return {
         "symbol": symbol,
@@ -2031,7 +2046,7 @@ async def walkforward_run(
     train_days: int = 180,
     test_days: int = 30,
     capital: float = 100_000.0,
-    use_demo_data: bool = True,
+    use_demo_data: bool = False,
 ):
     """运行 Walk-Forward 滚动验证。"""
     from quant_trading.alpha.walkforward import WalkForwardValidator
