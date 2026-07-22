@@ -549,16 +549,18 @@ async def backtest_compare(req: BacktestRequest):
             sig = result.get("signal_now", "unknown")
             hint = result.get("signal_hint", "")
             data_end = result.get("data_end", "")
-            signal_summary.append({
-                "strategy_id": sid,
-                "strategy_name": meta.get("name", sid),
-                "signal": sig,
-                "signal_hint": hint,
-                "data_end": data_end,
-                "total_return": result.get("metrics", {}).get("total_return", 0),
-                "sharpe": result.get("metrics", {}).get("sharpe_ratio", 0),
-                "total_trades": result.get("metrics", {}).get("total_trades", 0),
-            })
+            signal_summary.append(
+                {
+                    "strategy_id": sid,
+                    "strategy_name": meta.get("name", sid),
+                    "signal": sig,
+                    "signal_hint": hint,
+                    "data_end": data_end,
+                    "total_return": result.get("metrics", {}).get("total_return", 0),
+                    "sharpe": result.get("metrics", {}).get("sharpe_ratio", 0),
+                    "total_trades": result.get("metrics", {}).get("total_trades", 0),
+                }
+            )
 
         hold_count = sum(1 for s in signal_summary if s["signal"] != "flat")
         flat_count = sum(1 for s in signal_summary if s["signal"] == "flat")
