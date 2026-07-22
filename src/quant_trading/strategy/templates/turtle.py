@@ -39,7 +39,7 @@ class TurtleTradingStrategy(BarSeriesStrategy):
         params.setdefault("atr_period", 20)
         params.setdefault("risk_pct", 0.01)
         params.setdefault("max_units", 4)
-        params.setdefault("quantity", 10)
+        params.setdefault("quantity", 60)
         super().__init__(strategy_id="TurtleTrading", params=params, **kwargs)
         self._instrument_id: InstrumentId | None = None
         self._highs: deque[Decimal] = deque(maxlen=params["entry_period"])

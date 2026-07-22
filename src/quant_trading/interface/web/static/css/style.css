@@ -265,11 +265,45 @@ body::before {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
-  margin-bottom: 0;
+  margin-bottom: 0.6rem;
   align-items: start;
 }
 
-/* 数据管理：左侧表单略窄，右侧已存储标的更宽；两栏底边对齐 */
+.backtest-config-row {
+  align-items: start;
+}
+
+.backtest-config-row > .panel {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  box-sizing: border-box;
+  min-height: 0;
+}
+
+.backtest-config-row > .panel:first-child {
+  overflow: hidden;
+}
+
+.backtest-config-row > .panel > .form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.backtest-config-row > .panel > .form > .btn-block {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.backtest-config-row > .panel > .metrics-grid {
+  flex: 1;
+  align-content: start;
+}
+
 #page-data > .split-layout:first-of-type {
   grid-template-columns: minmax(300px, 0.85fr) minmax(480px, 1.5fr);
   align-items: stretch;
@@ -286,13 +320,18 @@ body::before {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 0.75rem;
+  justify-content: space-evenly;
+  gap: 1rem;
   min-height: 0;
+  padding: 0.25rem 0 0.15rem;
+}
+
+#page-data > .split-layout:first-of-type > .panel > .form > .form-row {
+  margin: 0;
 }
 
 #page-data > .split-layout:first-of-type > .panel > .form > .btn-block {
-  margin-top: auto;
+  margin-top: 0.5rem;
 }
 
 /* Forms */

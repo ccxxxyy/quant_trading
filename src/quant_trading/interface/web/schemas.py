@@ -18,7 +18,7 @@ class BacktestRequest(BaseModel):
     symbol: str
     start: str
     end: str | None = None
-    capital: float = 100_000.0
+    capital: float = 5_000.0
     params: dict | None = None
     use_demo_data: bool = False
     enable_t1: bool = False
@@ -36,9 +36,9 @@ class OptimizeRequest(BaseModel):
     symbol: str
     start: str
     end: str | None = None
-    capital: float = 100_000.0
+    capital: float = 5_000.0
     param_grid: dict[str, list]
-    use_demo_data: bool = True
+    use_demo_data: bool = False
 
 
 class PaperOrderRequest(BaseModel):
@@ -64,9 +64,9 @@ class MonteCarloRequest(BaseModel):
     symbol: str
     start: str
     end: str | None = None
-    capital: float = 100_000.0
+    capital: float = 5_000.0
     params: dict | None = None
-    use_demo_data: bool = True
+    use_demo_data: bool = False
     num_simulations: int = 100
     noise_pct: float = 0.02
 

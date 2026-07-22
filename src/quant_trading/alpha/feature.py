@@ -77,7 +77,8 @@ class RSIFactor(BaseFactor):
         delta = pl.col("close").diff()
         gain = delta.clip(lower_bound=0).rolling_mean(window_size=self._period)
         loss = (-delta.clip(upper_bound=0)).rolling_mean(window_size=self._period)
-        rs = gain / loss
+        # loss=0 时 rs 会 inf；统一落成可 JSON 序列化的 null
+        rs = pl.when(loss.is_null() | (loss == 0)).then(None).otherwise(gain / loss)
         return (100 - 100 / (1 + rs)).alias(self.name)
 
 
@@ -92,8 +93,13 @@ class VolumeRatioFactor(BaseFactor):
         return f"volume_ratio_{self._period}"
 
     def compute(self, df: pl.DataFrame) -> pl.Series:
-        return (pl.col("volume") / pl.col("volume").rolling_mean(window_size=self._period)).alias(
-            self.name
+        avg = pl.col("volume").rolling_mean(window_size=self._period)
+        # 场外基金等成交量恒为 0 时，量比无意义，避免 0/0 → NaN 导致 JSON 序列化失败
+        return (
+            pl.when(avg.is_null() | (avg == 0))
+            .then(None)
+            .otherwise(pl.col("volume") / avg)
+            .alias(self.name)
         )
 
 
@@ -130,6 +136,22 @@ class FeatureEngine:
                 result = result.with_columns(expr)
             except Exception as e:
                 logger.warning(f"Error computing factor {name}: {e}")
+        # NaN/Inf 不能进 JSON；统一成 null
+        float_cols = [
+            c
+            for c, dt in zip(result.columns, result.dtypes, strict=False)
+            if getattr(dt, "is_float", lambda: False)()
+        ]
+        if float_cols:
+            result = result.with_columns(
+                [
+                    pl.when(pl.col(c).is_nan() | pl.col(c).is_infinite())
+                    .then(None)
+                    .otherwise(pl.col(c))
+                    .alias(c)
+                    for c in float_cols
+                ]
+            )
         return result
 
     @property

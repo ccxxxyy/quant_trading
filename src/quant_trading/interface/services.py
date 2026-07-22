@@ -25,7 +25,7 @@ BUILTIN_STRATEGIES = {
         "params": {
             "fast_period": {"type": "int", "default": 10, "label": "快线周期"},
             "slow_period": {"type": "int", "default": 30, "label": "慢线周期"},
-            "quantity": {"type": "int", "default": 10, "label": "下单数量"},
+            "quantity": {"type": "int", "default": 60, "label": "下单数量"},
         },
     },
     "bollinger": {
@@ -35,7 +35,7 @@ BUILTIN_STRATEGIES = {
         "params": {
             "period": {"type": "int", "default": 20, "label": "布林带周期"},
             "num_std": {"type": "float", "default": 2.0, "label": "标准差倍数"},
-            "quantity": {"type": "int", "default": 10, "label": "下单数量"},
+            "quantity": {"type": "int", "default": 60, "label": "下单数量"},
         },
     },
     "rsi": {
@@ -46,7 +46,7 @@ BUILTIN_STRATEGIES = {
             "rsi_period": {"type": "int", "default": 14, "label": "RSI 周期"},
             "oversold": {"type": "int", "default": 30, "label": "超卖阈值"},
             "overbought": {"type": "int", "default": 70, "label": "超买阈值"},
-            "quantity": {"type": "int", "default": 10, "label": "下单数量"},
+            "quantity": {"type": "int", "default": 60, "label": "下单数量"},
         },
     },
     "macd": {
@@ -57,7 +57,7 @@ BUILTIN_STRATEGIES = {
             "fast_period": {"type": "int", "default": 12, "label": "快线周期"},
             "slow_period": {"type": "int", "default": 26, "label": "慢线周期"},
             "signal_period": {"type": "int", "default": 9, "label": "信号线周期"},
-            "quantity": {"type": "int", "default": 10, "label": "下单数量"},
+            "quantity": {"type": "int", "default": 60, "label": "下单数量"},
         },
     },
     "turtle": {
@@ -67,7 +67,7 @@ BUILTIN_STRATEGIES = {
         "params": {
             "entry_period": {"type": "int", "default": 20, "label": "入场通道周期"},
             "exit_period": {"type": "int", "default": 10, "label": "出场通道周期"},
-            "quantity": {"type": "int", "default": 10, "label": "下单数量"},
+            "quantity": {"type": "int", "default": 60, "label": "下单数量"},
         },
     },
     "grid": {
@@ -78,7 +78,7 @@ BUILTIN_STRATEGIES = {
             "upper_price": {"type": "float", "default": 110.0, "label": "网格上界"},
             "lower_price": {"type": "float", "default": 90.0, "label": "网格下界"},
             "grid_count": {"type": "int", "default": 10, "label": "网格数量"},
-            "quantity_per_grid": {"type": "int", "default": 10, "label": "每格数量"},
+            "quantity_per_grid": {"type": "int", "default": 60, "label": "每格数量"},
         },
     },
     "pair": {
@@ -90,7 +90,7 @@ BUILTIN_STRATEGIES = {
             "instrument_b": {"type": "str", "default": "", "label": "标的 B"},
             "lookback": {"type": "int", "default": 60, "label": "回看周期"},
             "entry_threshold": {"type": "float", "default": 2.0, "label": "入场阈值"},
-            "quantity": {"type": "int", "default": 10, "label": "下单数量"},
+            "quantity": {"type": "int", "default": 60, "label": "下单数量"},
         },
     },
 }
@@ -352,6 +352,8 @@ def run_backtest(
         "bar_count": len(bars),
         "used_demo_data": used_demo_data,
         "data_end": bars[-1].timestamp.isoformat() if bars else None,
+        "symbol": symbol,
+        "strategy": strategy_id,
     }
 
 
@@ -459,7 +461,11 @@ def get_bar_preview(
     instrument_id = InstrumentId.from_str(symbol)
     store = DataStore(settings.data.parquet_dir)
     start = datetime.strptime(start_str, "%Y-%m-%d") if start_str else None
-    end = datetime.strptime(end_str, "%Y-%m-%d") if end_str else None
+    end = None
+    if end_str:
+        end = datetime.strptime(end_str, "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        )
     bars = store.load_bars(instrument_id, BarInterval.DAILY, start=start, end=end)
     if not bars:
         return []

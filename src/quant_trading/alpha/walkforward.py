@@ -171,7 +171,7 @@ class WalkForwardValidator:
         self,
         start: datetime,
         end: datetime,
-        use_demo_data: bool = True,
+        use_demo_data: bool = False,
     ) -> WalkForwardResult:
         """执行 Walk-Forward 验证。"""
         windows = self._generate_windows(start, end)

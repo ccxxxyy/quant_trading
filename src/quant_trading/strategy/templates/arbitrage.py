@@ -32,7 +32,7 @@ class PairTradingStrategy(BarSeriesStrategy):
         params.setdefault("lookback", 60)
         params.setdefault("entry_threshold", 2.0)
         params.setdefault("exit_threshold", 0.5)
-        params.setdefault("quantity", 10)
+        params.setdefault("quantity", 60)
         params.setdefault("hedge_ratio", 1.0)
         super().__init__(strategy_id="PairTrading", params=params, **kwargs)
         self._instrument_a: InstrumentId | None = None

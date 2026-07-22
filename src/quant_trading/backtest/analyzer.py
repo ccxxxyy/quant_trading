@@ -102,22 +102,28 @@ class BacktestAnalyzer:
             daily_vol = math.sqrt(variance)
             metrics.volatility = daily_vol * math.sqrt(self._trading_days)
 
-            # 夏普比率
+            # 夏普比率（波动率极小时无意义，避免天文数字）
             daily_rf = self._risk_free_rate / self._trading_days
             excess_returns = [r - daily_rf for r in returns_list]
             avg_excess = sum(excess_returns) / len(excess_returns)
-            if daily_vol > 0:
+            if daily_vol > 1e-8 and metrics.volatility > 1e-6:
                 metrics.sharpe_ratio = (avg_excess / daily_vol) * math.sqrt(self._trading_days)
+            else:
+                metrics.sharpe_ratio = 0.0
 
             # 索提诺比率
             downside_returns = [r for r in excess_returns if r < 0]
-            if downside_returns:
+            if downside_returns and metrics.volatility > 1e-6:
                 downside_var = sum(r**2 for r in downside_returns) / len(downside_returns)
                 downside_vol = math.sqrt(downside_var)
-                if downside_vol > 0:
+                if downside_vol > 1e-8:
                     metrics.sortino_ratio = (avg_excess / downside_vol) * math.sqrt(
                         self._trading_days
                     )
+                else:
+                    metrics.sortino_ratio = 0.0
+            else:
+                metrics.sortino_ratio = 0.0
 
         # 最大回撤
         peak = values[0]
@@ -171,6 +177,23 @@ class BacktestAnalyzer:
 
     def format_report(self, metrics: PerformanceMetrics) -> str:
         """将绩效指标格式化为可读的文本报告。"""
+
+        def _pct(x: float) -> str:
+            """微小收益用更多小数。"""
+            pct = x * 100
+            if pct == 0:
+                return "0.00%"
+            if abs(pct) < 0.01:
+                return f"{pct:.4f}%"
+            return f"{pct:.2f}%"
+
+        def _ratio(x: float, label: str) -> str:
+            if metrics.volatility < 1e-6 and label in ("夏普", "索提诺"):
+                return "N/A（波动率≈0，比值无意义）"
+            if abs(x) > 50:
+                return f"{x:.3f}（波动极小，参考价值低）"
+            return f"{x:.3f}"
+
         lines = [
             "=" * 60,
             "回测绩效报告",
@@ -178,14 +201,15 @@ class BacktestAnalyzer:
             f"回测区间:      {metrics.start_date} -> {metrics.end_date}",
             f"初始资金:      {metrics.initial_capital:,.2f}",
             f"最终资金:      {metrics.final_capital:,.2f}",
+            f"绝对盈亏:      {metrics.final_capital - metrics.initial_capital:+,.2f}",
             "-" * 60,
-            f"总收益率:      {metrics.total_return * 100:.2f}%",
-            f"年化收益率:    {metrics.annual_return * 100:.2f}%",
-            f"年化波动率:    {metrics.volatility * 100:.2f}%",
-            f"夏普比率:      {metrics.sharpe_ratio:.3f}",
-            f"索提诺比率:    {metrics.sortino_ratio:.3f}",
+            f"总收益率:      {_pct(metrics.total_return)}",
+            f"年化收益率:    {_pct(metrics.annual_return)}",
+            f"年化波动率:    {_pct(metrics.volatility)}",
+            f"夏普比率:      {_ratio(metrics.sharpe_ratio, '夏普')}",
+            f"索提诺比率:    {_ratio(metrics.sortino_ratio, '索提诺')}",
             f"卡尔马比率:    {metrics.calmar_ratio:.3f}",
-            f"最大回撤:      {metrics.max_drawdown * 100:.2f}%",
+            f"最大回撤:      {_pct(metrics.max_drawdown)}",
             f"最大回撤持续:  {metrics.max_drawdown_duration_days} 天",
             "-" * 60,
             f"总交易笔数:    {metrics.total_trades}",
@@ -196,4 +220,10 @@ class BacktestAnalyzer:
             f"平均持仓天数:  {metrics.avg_trade_duration_days:.1f} 天",
             "=" * 60,
         ]
+        if abs(metrics.total_return) < 1e-4 and metrics.total_trades > 0:
+            lines.insert(
+                -1,
+                "提示: 相对初始资金盈亏极小（常见原因：资金过大、下单数量过小）。"
+                "请看「绝对盈亏」与交易明细，勿只看四舍五入后的收益率。",
+            )
         return "\n".join(lines)

@@ -36,7 +36,7 @@ class GridTradingStrategy(BarSeriesStrategy):
         params.setdefault("upper_price", 110.0)
         params.setdefault("lower_price", 90.0)
         params.setdefault("grid_count", 10)
-        params.setdefault("quantity_per_grid", 10)
+        params.setdefault("quantity_per_grid", 60)
         super().__init__(strategy_id="GridTrading", params=params, **kwargs)
         self._instrument_id: InstrumentId | None = None
         self._grid_levels: list[Decimal] = []
