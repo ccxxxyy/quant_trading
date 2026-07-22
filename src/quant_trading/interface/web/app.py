@@ -522,7 +522,7 @@ async def backtest_run(req: BacktestRequest):
 
 @app.post("/api/backtest/compare")
 async def backtest_compare(req: BacktestRequest):
-    """对比所有策略在相同标的和日期范围上的表现。"""
+    """对比所有策略在相同标的和日期范围上的表现，并返回每个策略当前信号。"""
     try:
         start = datetime.strptime(req.start, "%Y-%m-%d")
         end = datetime.strptime(req.end, "%Y-%m-%d") if req.end else None
@@ -542,7 +542,42 @@ async def backtest_compare(req: BacktestRequest):
                 results[sid] = result
             except Exception:
                 pass
-        return {"results": results}
+
+        signal_summary = []
+        for sid, result in results.items():
+            meta = BUILTIN_STRATEGIES.get(sid, {})
+            sig = result.get("signal_now", "unknown")
+            hint = result.get("signal_hint", "")
+            data_end = result.get("data_end", "")
+            signal_summary.append(
+                {
+                    "strategy_id": sid,
+                    "strategy_name": meta.get("name", sid),
+                    "signal": sig,
+                    "signal_hint": hint,
+                    "data_end": data_end,
+                    "total_return": result.get("metrics", {}).get("total_return", 0),
+                    "sharpe": result.get("metrics", {}).get("sharpe_ratio", 0),
+                    "total_trades": result.get("metrics", {}).get("total_trades", 0),
+                }
+            )
+
+        hold_count = sum(1 for s in signal_summary if s["signal"] != "flat")
+        flat_count = sum(1 for s in signal_summary if s["signal"] == "flat")
+        if hold_count > flat_count:
+            consensus = "多数策略认为当前应持仓"
+        elif flat_count > hold_count:
+            consensus = "多数策略认为当前应空仓"
+        else:
+            consensus = "策略意见分歧各半"
+
+        return {
+            "results": results,
+            "signal_summary": signal_summary,
+            "consensus": consensus,
+            "hold_count": hold_count,
+            "flat_count": flat_count,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -1295,12 +1330,61 @@ def _quote_for_symbol(symbol: str) -> dict[str, Any]:
     return result
 
 
+async def _refresh_watchlist_symbol(symbol: str, force: bool = False) -> dict[str, Any]:
+    """若本地日线过旧则拉取最近行情写入存储。返回刷新元信息。"""
+    from datetime import timedelta
+
+    from quant_trading.core.config import Settings
+    from quant_trading.data.store import DataStore
+    from quant_trading.model.instrument import InstrumentId
+    from quant_trading.model.market import BarInterval
+
+    info: dict[str, Any] = {"symbol": symbol, "refreshed": False, "error": None, "last_date": None}
+    try:
+        settings = Settings.load()
+        store = DataStore(settings.data.parquet_dir)
+        bars = store.load_bars(InstrumentId.from_str(symbol), BarInterval.DAILY)
+        last_date = bars[-1].timestamp.date() if bars else None
+        info["last_date"] = last_date.isoformat() if last_date else None
+        today = datetime.now().date()
+        ex = symbol.split(".")[-1].upper()
+        # 场外净值常晚 1～2 日；落后超过 1 天或 force 时拉取
+        lag_days = (today - last_date).days if last_date else 999
+        need = force or last_date is None or lag_days > (1 if ex == "OTC" else 2)
+        if not need:
+            return info
+        end = datetime.now()
+        start = end - timedelta(days=60)
+        provider = "yfinance" if ex in ("NASDAQ", "NYSE", "AMEX") else "akshare"
+        await fetch_market_data(
+            symbol=symbol, start=start, end=end, interval="1d", provider=provider, settings=settings
+        )
+        bars2 = store.load_bars(InstrumentId.from_str(symbol), BarInterval.DAILY)
+        last2 = bars2[-1].timestamp.date() if bars2 else None
+        info["refreshed"] = True
+        info["last_date"] = last2.isoformat() if last2 else info["last_date"]
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
 @app.get("/api/watchlist")
-async def watchlist_get():
-    """获取自选列表（含中文名、当日涨跌及日期）。"""
+async def watchlist_get(refresh: bool = False):
+    """获取自选列表（含中文名、当日涨跌及日期）。
+
+    refresh=true 时强制刷新行情缓存并更新本地过期日线。
+    """
     symbols = _load_watchlist()
+    if refresh:
+        _WATCHLIST_QUOTE_CACHE["ts"] = 0.0
+    refresh_meta = []
+    for sym in symbols:
+        refresh_meta.append(await _refresh_watchlist_symbol(sym, force=refresh))
     items = [_quote_for_symbol(s) for s in symbols]
-    return {"items": items, "count": len(items)}
+    for it in items:
+        if str(it.get("symbol", "")).upper().endswith(".OTC"):
+            it["note"] = "场外净值通常晚1～2个交易日才公布，不一定为最新值"
+    return {"items": items, "count": len(items), "refresh_meta": refresh_meta}
 
 
 @app.post("/api/watchlist")

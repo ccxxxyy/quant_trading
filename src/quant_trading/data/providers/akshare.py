@@ -597,6 +597,6 @@ class AkShareFeed(DataFeed):
                 logger.debug(f"Skipping fund row: {e}")
                 continue
 
-        bars = [b for b in bars if start_dt <= b.timestamp <= end_dt]
+        bars = [b for b in bars if start_dt.date() <= b.timestamp.date() <= end_dt.date()]
         logger.info(f"Fetched {len(bars)} fund NAV for {instrument_id}")
         return bars

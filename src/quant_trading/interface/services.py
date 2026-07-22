@@ -279,6 +279,41 @@ def run_backtest(
 
     metrics = engine.run()
 
+    final_positions = []
+    for key, pos in engine.positions.items():
+        if pos.is_flat:
+            continue
+        final_positions.append(
+            {
+                "instrument_id": key,
+                "quantity": pos.quantity,
+                "avg_cost": float(pos.avg_cost),
+                "side": "long" if pos.quantity > 0 else "short",
+                "opened_at": pos.opened_at.isoformat() if pos.opened_at else None,
+            }
+        )
+
+    if final_positions:
+        p0 = final_positions[0]
+        signal_now = p0["side"]
+        signal_hint = (
+            f"回测结束时仍持有{('多' if signal_now == 'long' else '空')}仓 "
+            f"{abs(p0['quantity'])} 份（均价 {p0['avg_cost']:.4f}），"
+            f"交易记录只列出已平仓的轮次，这一轮尚未卖出所以表里没有最后一行。"
+            f"按该策略：当前应继续持有，暂不新开反向单。"
+        )
+    else:
+        signal_now = "flat"
+        last_exit = None
+        if engine.trade_records:
+            last_exit = engine.trade_records[-1].exit_time
+        when = last_exit.strftime("%Y-%m-%d") if last_exit else "—"
+        signal_hint = (
+            f"回测结束时为空仓（最近一次卖出约在 {when}）。"
+            f"按该策略：现在不应买入，继续等待下一次入场信号；"
+            f"历史收益高不等于天天都有买卖，空仓本身也是一种操作建议。"
+        )
+
     return {
         "metrics": metrics_to_dict(metrics),
         "equity_curve": [
@@ -310,9 +345,13 @@ def run_backtest(
             }
             for t in engine.trade_records
         ],
+        "final_positions": final_positions,
+        "signal_now": signal_now,
+        "signal_hint": signal_hint,
         "report": engine.get_report(),
         "bar_count": len(bars),
         "used_demo_data": used_demo_data,
+        "data_end": bars[-1].timestamp.isoformat() if bars else None,
     }
 
 

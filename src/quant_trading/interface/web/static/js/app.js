@@ -64,6 +64,20 @@ function setMetricColor(el, value) {
 
 // ── Navigation ─────────────────────────────────────────────
 
+function alignBacktestPanels() {
+  const row = document.querySelector("#page-backtest .backtest-config-row");
+  if (!row) return;
+  const panels = row.querySelectorAll(":scope > .panel");
+  if (panels.length < 2) return;
+  const [left, right] = panels;
+  left.style.height = "";
+  requestAnimationFrame(() => {
+    const rh = Math.round(right.getBoundingClientRect().height);
+    if (rh < 120) return;
+    left.style.height = `${rh}px`;
+  });
+}
+
 function navigateTo(page) {
   if (!PAGE_META[page]) page = "dashboard";
   document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -79,6 +93,7 @@ function navigateTo(page) {
   if (page === "paper") refreshPaperState();
   if (page === "data") loadInstruments();
   if (page === "dashboard") loadWatchlist();
+  if (page === "backtest") alignBacktestPanels();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -231,8 +246,8 @@ function _candlestickConfig(bars, chartId, tradeMarkers) {
     let lo = Number(b.low);
     let hi = Number(b.high);
     if (hi - lo < eps) {
-      const mid = (lo + hi) / 2;
-      return [mid - eps / 2, mid + eps / 2];
+      const m = (lo + hi) / 2;
+      return [m - eps / 2, m + eps / 2];
     }
     return [lo, hi];
   });
@@ -242,8 +257,8 @@ function _candlestickConfig(bars, chartId, tradeMarkers) {
     let lo = Math.min(o, c);
     let hi = Math.max(o, c);
     if (hi - lo < eps) {
-      const mid = (lo + hi) / 2;
-      return [mid - eps / 2, mid + eps / 2];
+      const m = (lo + hi) / 2;
+      return [m - eps / 2, m + eps / 2];
     }
     return [lo, hi];
   });
@@ -446,32 +461,37 @@ async function loadInstruments(focusSymbol) {
     /* ignore */
   }
 
-  const groups = { a: [], etf: [], futures: [], us: [], fund: [] };
+  const groups = { us: [], fund: [], a: [], etf: [], futures: [] };
   (data.instruments || []).forEach((sym) => groups[_panelGroup(sym)].push(sym));
 
+  const cnTotal = groups.a.length + groups.etf.length + groups.futures.length;
+  const cnCnt = document.getElementById("count-cn");
+  if (cnCnt) cnCnt.textContent = `(${cnTotal})`;
+
   const hints = {
+    us: "AAPL.NASDAQ",
+    fund: "161725.OTC",
     a: "600519.SSE",
     etf: "510300.SSE",
     futures: "au2412.SHFE",
-    us: "AAPL.NASDAQ",
-    fund: "161725.OTC",
   };
-  for (const key of ["a", "etf", "futures", "us", "fund"]) {
+  for (const key of ["us", "fund", "a", "etf", "futures"]) {
     const list = document.getElementById(`instrument-list-${key}`);
     const cnt = document.getElementById(`count-${key}`);
     if (cnt) cnt.textContent = `(${groups[key].length})`;
     if (!list) continue;
     if (!groups[key].length) {
-      list.innerHTML = `<div class="empty-state" style="font-size:0.7rem;padding:0.35rem">暂无，试试 ${hints[key]}</div>`;
+      list.innerHTML = `<div class="empty-state" style="font-size:0.7rem;padding:0.25rem">暂无，试试 ${hints[key]}</div>`;
     } else {
       list.innerHTML = groups[key].map(_instrumentRowHtml).join("");
       _bindInstrumentList(list);
     }
   }
 
-  const target = focusSymbol && data.instruments.includes(focusSymbol)
+  const allSyms = data.instruments || [];
+  const target = focusSymbol && allSyms.includes(focusSymbol)
     ? focusSymbol
-    : data.instruments[0];
+    : allSyms[0];
   if (target) previewBars(target);
 }
 
@@ -621,7 +641,10 @@ function populateStrategySelect() {
     .map(([id, meta]) => `<option value="${id}">${meta.name} (${id})</option>`)
     .join("");
 
-  select.addEventListener("change", () => renderStrategyParams(select.value));
+  select.addEventListener("change", () => {
+    renderStrategyParams(select.value);
+    alignBacktestPanels();
+  });
   renderStrategyParams(select.value);
 }
 
@@ -653,6 +676,7 @@ function updateMetrics(metrics) {
     el.textContent = text;
     if (colorVal != null) setMetricColor(el, colorVal);
   }
+  alignBacktestPanels();
 }
 
 function _sideCn(side) {
@@ -720,20 +744,17 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     updateMetrics(result.metrics);
     renderEquityChart("equity-chart", result.equity_curve);
     renderDrawdownChart(result.equity_curve);
-    renderKlineWithTrades(result.bars || [], result.trades);
+    renderKlineWithTrades(result.equity_curve, result.trades, result.final_positions);
     updateTradesTable(result.trades);
+    updateBacktestSignal(result);
     updateDashboard();
 
     document.getElementById("run-montecarlo-btn").disabled = false;
     document.getElementById("run-review-btn").disabled = false;
 
     const mode = result.used_demo_data ? "（演示数据）" : "（真实数据）";
-    const nTrades = result.metrics?.total_trades ?? result.trades?.length ?? 0;
-    if (nTrades === 0) {
-      toast(`回测完成${mode}: 无交易（该时段双均线未出现金叉/死叉，可拉长日期或换策略）`, "error");
-    } else {
-      toast(`回测完成${mode}: 收益率 ${fmtPct(result.metrics.total_return)}`, "success");
-    }
+    const tip = result.signal_now === "flat" ? " · 结束时空仓→当下先别买" : " · 结束时仍持仓→当下继续拿";
+    toast(`回测完成${mode}: 收益率 ${fmtPct(result.metrics.total_return)}${tip}`, "success");
   } catch (err) {
     let msg = err.message;
     if (msg.includes("No data") || msg.includes("Fetch data first")) {
@@ -782,13 +803,114 @@ function renderDrawdownChart(equityCurve) {
 
 // ── K-line with Trade Markers ───────────────────────────────
 
-function renderKlineWithTrades(bars, trades) {
+function updateBacktestSignal(result) {
+  const el = document.getElementById("backtest-signal-banner");
+  const box = document.getElementById("my-position-box");
+  if (!el) return;
+  el.style.display = "block";
+  if (box) box.style.display = "block";
+  const dataEnd = (result.data_end || "").slice(0, 10);
+  const hint = result.signal_hint || "";
+  if (result.signal_now === "flat") {
+    el.style.borderColor = "var(--accent)";
+    el.innerHTML = `<strong style="color:var(--accent)">策略仓位：空仓</strong>`
+      + (dataEnd ? ` · 数据截至 ${dataEnd}` : "")
+      + `<br>${hint}`
+      + `<br><span style="color:var(--text-muted)">这是「策略虚拟账户」的仓位，不是你真实基金账户。请在下方选择你实际持有情况。</span>`;
+  } else {
+    el.style.borderColor = "var(--up)";
+    el.innerHTML = `<strong style="color:var(--up)">策略仓位：仍持仓</strong>`
+      + (dataEnd ? ` · 数据截至 ${dataEnd}` : "")
+      + `<br>${hint}`
+      + `<br><span style="color:var(--text-muted)">这是「策略虚拟账户」的仓位，不是你真实基金账户。请在下方选择你实际持有情况。</span>`;
+  }
+  // 若用户之前选过实际仓位，刷新建议
+  if (_myRealPosition) applyMyPositionAdvice(_myRealPosition);
+  else {
+    const adv = document.getElementById("my-action-advice");
+    if (adv) adv.textContent = "选「我实际持有」或「我实际空仓」后，这里给出对你账户的建议。";
+  }
+}
+
+let _myRealPosition = null; // "hold" | "flat"
+
+function applyMyPositionAdvice(state) {
+  _myRealPosition = state;
+  const adv = document.getElementById("my-action-advice");
+  const r = lastBacktestResult;
+  if (!adv || !r) return;
+  document.querySelectorAll("#my-pos-hold, #my-pos-flat").forEach((btn) => {
+    btn.classList.toggle("btn-primary", btn.dataset.state === state);
+    btn.classList.toggle("btn-ghost", btn.dataset.state !== state);
+  });
+
+  const stratFlat = r.signal_now === "flat";
+  // 四象限：实际 × 策略
+  if (state === "hold" && stratFlat) {
+    adv.innerHTML = `<strong style="color:var(--down)">对你账户的建议：考虑卖出/赎回</strong><br>`
+      + `你手里还拿着，但策略认为现在应空仓（已出场或无持仓信号）。`
+      + `不必对照交易记录里的买入日——那些是「假如一直跟策略」的历史。你只问：策略现在要不要仓？答案是不要 → 倾向卖。`;
+  } else if (state === "hold" && !stratFlat) {
+    adv.innerHTML = `<strong style="color:var(--up)">对你账户的建议：继续持有</strong><br>`
+      + `你实际持有，策略结束时也仍持仓。买入成本、买入日期可以和策略不同，不影响这条建议。`
+      + `等策略变成空仓时，再考虑卖。`;
+  } else if (state === "flat" && !stratFlat) {
+    adv.innerHTML = `<strong style="color:var(--up)">对你账户的建议：考虑买入/申购</strong><br>`
+      + `你现在空仓，但策略认为应持有。可按你的资金与风险，考虑建仓（数量自己定）。`
+      + `不用补做策略历史上的每一笔。`;
+  } else {
+    adv.innerHTML = `<strong style="color:var(--accent)">对你账户的建议：继续空仓观望</strong><br>`
+      + `你空仓，策略也空仓。当下不要买，隔几天用同样参数再回测到「今天」，看策略是否变成持仓。`;
+  }
+}
+
+document.getElementById("my-pos-hold")?.addEventListener("click", () => applyMyPositionAdvice("hold"));
+document.getElementById("my-pos-flat")?.addEventListener("click", () => applyMyPositionAdvice("flat"));
+
+function updatePositionStatusBanner(result) {
+  updateBacktestSignal(result);
+}
+
+function renderKlineWithTrades(equityCurve, trades, openPositions) {
   destroyChart("kline-trades-chart");
   const emptyEl = document.getElementById("kline-trades-empty");
   const ctx = document.getElementById("kline-trades-chart");
   if (!ctx || !bars?.length) { if (emptyEl) emptyEl.style.display = "block"; return; }
   if (emptyEl) emptyEl.style.display = "none";
-  charts["kline-trades-chart"] = new Chart(ctx, _candlestickConfig(bars, "kline-trades-chart", trades || []));
+
+  const labels = equityCurve.map(p => p.timestamp?.slice(0, 10) || "");
+  const prices = equityCurve.map(p => p.equity);
+
+  const buyPoints = new Array(labels.length).fill(null);
+  const sellPoints = new Array(labels.length).fill(null);
+  const holdPoints = new Array(labels.length).fill(null);
+
+  for (const t of (trades || [])) {
+    const entryDate = t.entry_time?.slice(0, 10);
+    const exitDate = t.exit_time?.slice(0, 10);
+    const entryIdx = labels.indexOf(entryDate);
+    const exitIdx = labels.indexOf(exitDate);
+    if (entryIdx >= 0) buyPoints[entryIdx] = prices[entryIdx];
+    if (exitIdx >= 0) sellPoints[exitIdx] = prices[exitIdx];
+  }
+  // 未平仓：在曲线末尾标「持仓中」
+  if (openPositions?.length && labels.length) {
+    holdPoints[labels.length - 1] = prices[prices.length - 1];
+  }
+
+  charts["kline-trades-chart"] = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label: "权益", data: prices, borderColor: "#3b82f6", borderWidth: 1.5, pointRadius: 0, tension: 0.15, fill: false },
+        { label: "买入 ▲", data: buyPoints, borderColor: "#ef4444", backgroundColor: "#ef4444", pointRadius: 7, pointStyle: "triangle", showLine: false },
+        { label: "卖出 ▼", data: sellPoints, borderColor: "#22c55e", backgroundColor: "#22c55e", pointRadius: 7, pointStyle: "triangle", rotation: 180, showLine: false },
+        { label: "结束仍持仓 ●", data: holdPoints, borderColor: "#f59e0b", backgroundColor: "#f59e0b", pointRadius: 8, pointStyle: "circle", showLine: false },
+      ],
+    },
+    options: { ...chartOptions("权益 + 买卖点"), plugins: { ...chartOptions("").plugins, legend: { display: true, labels: { color: "#94a3b8", font: { size: 11 } } } } },
+  });
 }
 
 // ── Monte Carlo Stress Test ────────────────────────────────
@@ -1016,8 +1138,9 @@ document.getElementById("run-compare-btn").addEventListener("click", async () =>
     });
 
     renderCompareChart(data.results);
-    renderCompareTable(data.results);
-    toast(`策略对比完成: ${Object.keys(data.results).length} 个策略`, "success");
+    renderCompareTable(data.results, data.signal_summary);
+    renderCompareSignalSummary(data);
+    toast(`策略对比完成: ${Object.keys(data.results).length} 个策略 · ${data.consensus || ""}`, "success");
   } catch (err) {
     toast(err.message, "error");
   } finally {
@@ -1073,14 +1196,21 @@ function renderCompareChart(results) {
   });
 }
 
-function renderCompareTable(results) {
+function renderCompareTable(results, signalSummary) {
   const tbody = document.querySelector("#compare-table tbody");
+  const sigMap = {};
+  (signalSummary || []).forEach((s) => { sigMap[s.strategy_id] = s; });
+
   const rows = Object.entries(results).map(([sid, result]) => {
     const m = result.metrics;
     const name = strategiesMeta[sid]?.name || sid;
     const retClass = m.total_return >= 0 ? "positive" : "negative";
+    const sig = sigMap[sid]?.signal ?? result.signal_now;
+    const sigText = sig === "flat" ? "空仓" : (sig ? "持仓" : "-");
+    const sigCls = sig === "flat" ? "negative" : (sig ? "positive" : "");
     return `<tr>
       <td>${name}</td>
+      <td class="${sigCls}"><strong>${sigText}</strong></td>
       <td class="${retClass}">${fmtPct(m.total_return)}</td>
       <td>${fmtNum(m.sharpe_ratio, 3)}</td>
       <td>${fmtPct(m.max_drawdown)}</td>
@@ -1088,7 +1218,22 @@ function renderCompareTable(results) {
       <td>${fmtPct(m.win_rate, 1)}</td>
     </tr>`;
   });
-  tbody.innerHTML = rows.join("") || '<tr><td colspan="6" class="empty-state">暂无数据</td></tr>';
+  tbody.innerHTML = rows.join("") || '<tr><td colspan="7" class="empty-state">暂无数据</td></tr>';
+}
+
+function renderCompareSignalSummary(data) {
+  const box = document.getElementById("compare-signal-box");
+  if (!box || !data.signal_summary) return;
+  box.style.display = "block";
+
+  const hold = data.hold_count || 0;
+  const flat = data.flat_count || 0;
+  const total = hold + flat;
+  const consensus = data.consensus || "";
+  const color = hold > flat ? "var(--up)" : flat > hold ? "var(--accent)" : "var(--text-muted)";
+  box.innerHTML = `<strong style="color:${color}">投票结果：${consensus}</strong>
+    （持仓 ${hold}票 vs 空仓 ${flat}票 / 共 ${total} 个策略）<br>
+    <span style="color:var(--text-muted)">下方表格「当前信号」= 各策略回测到结束日时是持仓还是空仓。多数派可参考，不保证正确。</span>`;
 }
 
 // ── Strategies Page ────────────────────────────────────────
@@ -2021,14 +2166,16 @@ document.getElementById("walkforward-form").addEventListener("submit", async (e)
     const tbody = document.querySelector("#walkforward-table tbody");
     tbody.innerHTML = (data.windows || []).map((w, i) => {
       const cls = w.return >= 0 ? "positive" : "negative";
+      const wid = (w.id != null ? Number(w.id) : i) + 1;
       return `<tr>
-        <td>${w.id || i + 1}</td>
-        <td>-</td>
+        <td>第 ${wid} 段</td>
+        <td style="font-size:0.75rem;font-family:var(--mono)">${w.train || "-"}</td>
+        <td style="font-size:0.75rem;font-family:var(--mono)">${w.test || "-"}</td>
         <td>${fmtNum(w.sharpe, 3)}</td>
         <td class="${cls}">${fmtPct(w.return)}</td>
-        <td>-</td>
+        <td>${w.return > 0 ? "盈利" : w.return < 0 ? "亏损" : "持平"}</td>
       </tr>`;
-    }).join("") || '<tr><td colspan="5" class="empty-state">无数据</td></tr>';
+    }).join("") || '<tr><td colspan="6" class="empty-state">无数据</td></tr>';
     toast(`Walk-Forward 完成: ${data.num_windows} 窗口`, "success");
   } catch (err) { toast(err.message, "error"); }
   finally { showLoading(false); }
@@ -2699,30 +2846,35 @@ function _fmtChg(v) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-async function loadWatchlist() {
+async function loadWatchlist(forceRefresh = false) {
   const list = document.getElementById("watchlist-list");
   const countEl = document.getElementById("watchlist-count");
   if (!list) return;
   try {
-    const data = await api("/watchlist");
+    const q = forceRefresh ? "?refresh=true" : "";
+    const data = await api(`/watchlist${q}`);
     if (countEl) countEl.textContent = data.count || 0;
     if (!data.items?.length) {
       list.innerHTML = '<div class="empty-state" style="font-size:0.75rem">暂无自选，输入代码后点击「加入自选」</div>';
       return;
     }
+    const today = new Date().toISOString().slice(0, 10);
     list.innerHTML = data.items.map((item) => {
       const name = item.name || item.symbol.split(".")[0];
       const code = item.symbol;
       const dateStr = item.asof_date || "-";
       const chg = _fmtChg(item.change_pct);
       const chgCls = item.change_pct > 0 ? "positive" : item.change_pct < 0 ? "negative" : "";
+      const stale = dateStr && dateStr < today;
+      const note = item.note ? `<div class="watchlist-code" style="color:var(--text-muted);font-size:0.65rem">${item.note}</div>` : "";
       return `<div class="watchlist-row" data-symbol="${code}">
         <div class="watchlist-main">
           <div class="watchlist-name watchlist-label">${name}</div>
           <div class="watchlist-code">${code}</div>
+          ${note}
         </div>
         <div class="watchlist-chg">
-          <div class="watchlist-chg-label">当日涨幅 · ${dateStr}</div>
+          <div class="watchlist-chg-label">涨幅 · ${dateStr}${stale ? "（非今日）" : ""}</div>
           <div class="watchlist-chg-val ${chgCls}">${chg}</div>
         </div>
         <button class="btn btn-sm btn-ghost watchlist-remove" data-symbol="${code}">移除</button>
@@ -2751,13 +2903,25 @@ async function loadWatchlist() {
     if (!_watchlistTimer) {
       _watchlistTimer = setInterval(() => {
         const page = document.getElementById("page-dashboard");
-        if (page && page.classList.contains("active")) loadWatchlist();
-      }, 60000);
+        if (page && page.classList.contains("active")) loadWatchlist(true);
+      }, 120000);
     }
   } catch {
     list.innerHTML = '<div class="empty-state">自选加载失败</div>';
   }
 }
+
+document.getElementById("watchlist-refresh-btn")?.addEventListener("click", async () => {
+  showLoading(true);
+  try {
+    await loadWatchlist(true);
+    toast("自选行情已刷新", "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    showLoading(false);
+  }
+});
 
 document.getElementById("watchlist-add-btn")?.addEventListener("click", async () => {
   const input = document.getElementById("watchlist-input");
@@ -2855,6 +3019,12 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
     toast(err.message, "error");
   } finally {
     showLoading(false);
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (document.getElementById("page-backtest")?.classList.contains("active")) {
+    alignBacktestPanels();
   }
 });
 

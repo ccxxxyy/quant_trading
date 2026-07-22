@@ -122,6 +122,5 @@ class TestBacktestEngine:
         assert len(trades) == 2
         assert trades[0].entry_price > 0
         assert trades[1].entry_price > 0
-        assert trades[0].entry_time != trades[1].entry_time
         assert trades[0].entry_time < trades[1].entry_time
         assert trades[0].exit_time < trades[1].entry_time

@@ -16,7 +16,7 @@ from quant_trading.model.position import Position
 
 logger = logging.getLogger(__name__)
 
-_PERSIST_DIR = Path("data/paper_trading")
+_PERSIST_DIR = Path(__file__).resolve().parents[3] / "data" / "paper_trading"
 
 
 class PaperTradingGateway(BaseGateway):
