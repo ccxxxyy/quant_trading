@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css?v=14" />
+  <link rel="stylesheet" href="/static/css/style.css?v=23" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -103,10 +103,13 @@
         <div class="panel" style="margin-bottom:0.6rem">
           <div class="panel-header">
             <h3>自选列表</h3>
-            <span class="badge" id="watchlist-count">0</span>
+            <div style="display:flex;align-items:center;gap:0.4rem">
+              <button class="btn btn-sm btn-ghost" id="watchlist-refresh-btn" title="强制刷新行情">刷新</button>
+              <span class="badge" id="watchlist-count">0</span>
+            </div>
           </div>
           <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.4rem;color:var(--text-muted)">
-            「当日涨幅」及对应日期；约每分钟刷新。可在数据管理「已存储标的」一键加入。
+            「当日涨幅」旁日期为数据日期。场外基金按本地净值；过期会自动拉取。点「刷新」强制更新。
           </p>
           <div style="display:flex;gap:0.4rem;margin-bottom:0.4rem">
             <input type="text" id="watchlist-input" placeholder="如 161725.OTC / 510300.SSE"
@@ -188,7 +191,7 @@
               <h3>已存储标的</h3>
               <span class="badge" id="instrument-count">0</span>
             </div>
-            <p class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)">三栏独立滚动；点「自选」加入总览自选列表，点名称预览 K 线。</p>
+            <p class="panel-text" style="font-size:0.72rem;margin-bottom:0.35rem;color:var(--text-muted)">三栏：美股 / 场外基金 / 国内；国内栏内再分 A股·场内·期货。点「自选」加入总览，点名称预览 K 线。</p>
             <div class="instrument-tri">
               <div class="instrument-col">
                 <div class="instrument-group-label">美股 <span id="count-us">0</span></div>
@@ -198,9 +201,16 @@
                 <div class="instrument-group-label">场外基金 <span id="count-fund">0</span></div>
                 <div class="instrument-list" id="instrument-list-fund"></div>
               </div>
-              <div class="instrument-col">
-                <div class="instrument-group-label">A股 / 场内 / 期货 <span id="count-other">0</span></div>
-                <div class="instrument-list" id="instrument-list-other"></div>
+              <div class="instrument-col instrument-col-cn">
+                <div class="instrument-group-label">国内 <span id="count-cn">0</span></div>
+                <div class="instrument-cn-scroll">
+                  <div class="instrument-sub-label">A 股 <span id="count-a">0</span></div>
+                  <div class="instrument-list" id="instrument-list-a"></div>
+                  <div class="instrument-sub-label">场内基金 <span id="count-etf">0</span></div>
+                  <div class="instrument-list" id="instrument-list-etf"></div>
+                  <div class="instrument-sub-label">期货 <span id="count-futures">0</span></div>
+                  <div class="instrument-list" id="instrument-list-futures"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -246,7 +256,7 @@
       <!-- Backtest -->
       <section class="page" id="page-backtest">
         <!-- 单策略回测 -->
-        <div class="split-layout">
+        <div class="split-layout backtest-config-row">
           <div class="panel">
             <div class="panel-header"><h3>回测配置</h3></div>
             <form id="backtest-form" class="form">
@@ -338,12 +348,46 @@
         </div>
         <div class="panel">
           <div class="panel-header"><h3>交易记录</h3></div>
+          <div id="backtest-signal-banner" class="panel-text" style="display:none;font-size:0.8rem;margin-bottom:0.5rem;padding:0.55rem 0.65rem;border-radius:8px;border:1px solid var(--border);background:var(--bg-elevated);line-height:1.45"></div>
+          <div id="my-position-box" style="display:none;margin-bottom:0.5rem;padding:0.55rem 0.65rem;border-radius:8px;border:1px dashed var(--border);background:var(--bg)">
+            <div style="font-size:0.8rem;margin-bottom:0.35rem;color:var(--text)">我实际账户里这笔标的现在是？</div>
+            <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.4rem">
+              <button type="button" class="btn btn-sm btn-ghost" id="my-pos-hold" data-state="hold">我实际持有</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="my-pos-flat" data-state="flat">我实际空仓</button>
+            </div>
+            <div id="my-action-advice" style="font-size:0.8rem;line-height:1.45;color:var(--text-muted)">选上面一项后，系统把策略信号翻译成对你账户的建议（不必和历史交易记录一致）。</div>
+          </div>
+          <p class="panel-text" style="font-size:0.75rem;margin-bottom:0.4rem;color:var(--text-muted)">
+            交易表=策略「假如从头跟单」的已平仓轮次，不是你的真实成交。看当下：先看「策略信号」，再点「我实际持有/空仓」得到操作建议。
+          </p>
           <div class="table-wrap">
             <table class="data-table" id="trades-table">
               <thead>
                 <tr>
-                  <th>标的</th><th>方向</th><th>入场</th><th>出场</th>
+                  <th>标的</th><th>方向</th><th>入场(买)</th><th>出场(卖)</th>
                   <th>数量</th><th>盈亏</th><th>收益率</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 策略对比（紧挨交易记录下方） -->
+        <div class="panel compare-panel">
+          <div class="panel-header">
+            <h3>策略对比（全部策略 vs 同一标的）</h3>
+            <button class="btn btn-sm btn-primary" id="run-compare-btn">运行对比</button>
+          </div>
+          <div id="compare-signal-box" style="display:none;margin-bottom:0.5rem;padding:0.55rem 0.65rem;border-radius:8px;border:1px solid var(--border);background:var(--bg-elevated);font-size:0.8rem;line-height:1.45">
+          </div>
+          <div class="chart-wrap" style="margin-top:0.5rem"><canvas id="compare-equity-chart"></canvas></div>
+          <div class="table-wrap" style="margin-top:0.5rem">
+            <table class="data-table" id="compare-table">
+              <thead>
+                <tr>
+                  <th>策略</th><th>当前信号</th><th>总收益率</th><th>Sharpe</th>
+                  <th>最大回撤</th><th>交易次数</th><th>胜率</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -354,7 +398,9 @@
         <!-- Walk-Forward 防过拟合 -->
         <div class="panel">
           <div class="panel-header"><h3>Walk-Forward 防过拟合分析</h3></div>
-          <p class="panel-text" style="margin-bottom:0.5rem;font-size:0.8rem">将回测数据按滑动窗口切分为多段 In-Sample / Out-of-Sample，检验策略样本外是否依然有效。</p>
+          <p class="panel-text" style="margin-bottom:0.5rem;font-size:0.8rem">
+            把整段历史切成多段「前一段练、后一段考」。表格每一行=一段考试：测试期收益为正算这一段过关。一致性=盈利段数/总段数，&gt;50% 较稳健。平均测试 Sharpe 为负说明多数考试期风险调整后亏钱。
+          </p>
           <form id="walkforward-form" class="form">
             <div class="form-row two-col">
               <div>
@@ -372,7 +418,14 @@
           <div class="table-wrap" style="margin-top:0.35rem">
             <table class="data-table" id="walkforward-table">
               <thead>
-                <tr><th>窗口</th><th>训练期 Sharpe</th><th>测试期 Sharpe</th><th>测试期收益</th><th>效率比</th></tr>
+                <tr>
+                  <th>窗口</th>
+                  <th>训练期日期</th>
+                  <th>测试期日期</th>
+                  <th>测试期 Sharpe</th>
+                  <th>测试期收益</th>
+                  <th>结果</th>
+                </tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -393,7 +446,9 @@
             <h3>Monte Carlo 压力测试</h3>
             <button class="btn btn-sm btn-primary" id="run-montecarlo-btn" disabled>运行模拟</button>
           </div>
-          <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">将回测的交易序列随机重排 500 次，生成最终资金和最大回撤的概率分布，检验策略稳健性。</p>
+          <p class="panel-text" style="margin-bottom:0.35rem;font-size:0.8rem">
+            把回测里每笔盈亏的<strong>顺序</strong>打乱 500 次。最终资金总和不变（加减交换律），所以 5%/50%/95% 最终资金可能相同；要看的是<strong>最大回撤</strong>会不会因顺序变差。路径图看「中间怎么晃」，回撤指标看「最惨有多惨」。
+          </p>
           <div id="mc-stats" style="display:none">
             <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:0.5rem">
               <div class="kpi-card"><div class="kpi-label">原始最终资金</div><div class="kpi-value" id="mc-base-final">-</div></div>
@@ -451,26 +506,6 @@
             <canvas id="heatmap-chart"></canvas>
           </div>
           <div id="heatmap-empty" class="empty-state">请先在参数优化页面运行优化</div>
-        </div>
-
-        <!-- 策略对比 -->
-        <div class="panel compare-panel">
-          <div class="panel-header">
-            <h3>策略对比（全部策略 vs 同一标的）</h3>
-            <button class="btn btn-sm btn-primary" id="run-compare-btn">运行对比</button>
-          </div>
-          <div class="chart-wrap"><canvas id="compare-equity-chart"></canvas></div>
-          <div class="table-wrap" style="margin-top:0.5rem">
-            <table class="data-table" id="compare-table">
-              <thead>
-                <tr>
-                  <th>策略</th><th>总收益率</th><th>Sharpe</th>
-                  <th>最大回撤</th><th>交易次数</th><th>胜率</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
         </div>
       </section>
 
@@ -1400,6 +1435,6 @@
     <span>处理中...</span>
   </div>
 
-  <script src="/static/js/app.js?v=21"></script>
+  <script src="/static/js/app.js?v=35"></script>
 </body>
 </html>

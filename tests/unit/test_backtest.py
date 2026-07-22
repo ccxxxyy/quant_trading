@@ -86,3 +86,41 @@ class TestBacktestEngine:
         # 价格每根K线涨1元，第2根买入(开盘约102.5)，第8根卖出(开盘约108.5)
         # 应有正收益
         assert metrics.total_return > 0
+
+    def test_trade_records_keep_entry_after_flat(self):
+        """平仓后入场价/时间不应被清零；多轮交易各自独立。"""
+
+        class TwoRoundStrategy(BarSeriesStrategy):
+            def __init__(self):
+                super().__init__(strategy_id="two_round")
+                self._n = 0
+
+            def on_init(self):
+                pass
+
+            def on_bar_update(self, bar: Bar):
+                self._n += 1
+                if self._n == 2:
+                    self.ctx.buy_market(bar.instrument_id, 10)
+                elif self._n == 4:
+                    self.ctx.sell_market(bar.instrument_id, 10)
+                elif self._n == 6:
+                    self.ctx.buy_market(bar.instrument_id, 10)
+                elif self._n == 8:
+                    self.ctx.sell_market(bar.instrument_id, 10)
+
+        engine = BacktestEngine(initial_capital=100_000.0, slippage_rate=0, commission_rate=0)
+        iid = InstrumentId("TEST", Exchange.SSE)
+        bars = make_bars(10, start_price=100.0)
+        engine.add_bar_data(iid, bars)
+        strategy = TwoRoundStrategy()
+        strategy.attach(StrategyContext(engine, "two_round"))
+        engine.add_strategy(strategy)
+        engine.run()
+
+        trades = engine.trade_records
+        assert len(trades) == 2
+        assert trades[0].entry_price > 0
+        assert trades[1].entry_price > 0
+        assert trades[0].entry_time < trades[1].entry_time
+        assert trades[0].exit_time < trades[1].entry_time

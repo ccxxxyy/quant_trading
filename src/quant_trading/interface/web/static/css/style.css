@@ -269,6 +269,40 @@ body::before {
   align-items: start;
 }
 
+.backtest-config-row {
+  align-items: start;
+}
+
+.backtest-config-row > .panel {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  box-sizing: border-box;
+}
+
+.backtest-config-row > .panel:first-child {
+  overflow: hidden;
+}
+
+.backtest-config-row > .panel > .form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.backtest-config-row > .panel > .form > .btn-block {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.backtest-config-row > .panel > .metrics-grid {
+  flex: 1;
+  align-content: start;
+}
+
 /* Forms */
 .form { display: flex; flex-direction: column; gap: 0.5rem; }
 
@@ -447,6 +481,35 @@ body::before {
   overflow-y: auto;
   padding: 0.3rem;
   gap: 0.3rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.instrument-col-cn {
+  max-height: 280px;
+}
+
+.instrument-cn-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.instrument-sub-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.3rem 0.5rem 0.15rem;
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.instrument-col-cn .instrument-list {
+  max-height: none;
+  overflow: visible;
+  padding: 0.25rem 0.3rem 0.45rem;
 }
 
 .instrument-item {
